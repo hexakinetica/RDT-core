@@ -1,0 +1,11 @@
+PROJECT_NAME      = "@PROJECT_NAME@ MotionInterface Module"
+PROJECT_NUMBER    = "1.0" # Or @PROJECT_VERSION@ if you set it in CMake
+OUTPUT_DIRECTORY  = "@CMAKE_BINARY_DIR@/docs/api_motiontypes"
+INPUT             = "@CMAKE_CURRENT_SOURCE_DIR@" # This directory
+RECURSIVE         = YES
+EXTRACT_ALL       = YES
+GENERATE_HTML     = YES
+HTML_OUTPUT       = html
+HAVE_DOT          = YES # Set to NO if you don't have/want Graphviz diagrams
+CLASS_DIAGRAMS    = YES # If HAVE_DOT is YES
+NAMESPACE_diagrams = YES # If HAVE_DOT is YES

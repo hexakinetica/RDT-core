@@ -1,0 +1,3 @@
+{
+    "cmake.buildDirectory": "${workspaceFolder}/../../RobotControl_MVP_builds/${workspaceFolderBasename}_build"
+}

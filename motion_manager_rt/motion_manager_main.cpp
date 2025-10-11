@@ -1,38 +1,42 @@
 // motion_manager_main.cpp
 #include "MotionManager.h"
-#include "FakeMotionInterface.h" // For instantiating a concrete IMotionInterface
+#include "InternalSimulation.h" // Используем симуляцию для этого теста
+#include "MasterHardwareInterface.h"
 #include "Logger.h"
-#include "DataTypes.h" // For TrajectoryPoint, etc.
-#include "Units.h"     // For literals like _ms, _deg, _rad, _m
+#include "DataTypes.h"
+#include "Units.h"
+#include "KinematicModel.h" // Ensure this header defines KinematicModel
 
 #include <iostream>
 #include <thread>
 #include <chrono>
 #include <memory>
-#include <iomanip> // For std::fixed, std::setprecision
-#include <optional> // For std::optional from dequeueFeedback
-#include <vector>   // For std::vector if creating arrays of points
+#include <iomanip>
+#include <vector>
+#include <string>
 
-// Helper to print TrajectoryPoint feedback (simplified)
+// Helper to print feedback with fault info
 void printFeedbackPoint(const RDT::TrajectoryPoint& pt) {
     using namespace RDT;
-    // std::cout << std::fixed << std::setprecision(3); // Moved to a central place or use logger formatting
-    // MODIFICATION: Using LOG_DEBUG_F for more structured output via logger
-    LOG_DEBUG_F("FeedbackPrinter",
-              "[FB] Seq: %u, TId: %llu, MType: %d, RTState: %d, Reach: %c, Err: %c | A1 Cmd: %s, A1 Fb: %s | ",
-              pt.header.sequence_index,
-              pt.header.trajectory_id,
-              static_cast<int>(pt.header.motion_type),
+    std::string fault_info = "";
+    if (pt.feedback.fault.type == FaultType::VelocityLimit) {
+        fault_info = " [WARNING: VELOCITY LIMIT ON A" + std::to_string(static_cast<int>(pt.feedback.fault.axis) + 1) +
+                     ", req: " + pt.feedback.fault.actual_velocity_deg_s.toString(1) +
+                     ", limit: " + pt.feedback.fault.limit_velocity_deg_s.toString(1) + "]";
+    } else if (pt.feedback.fault.type == FaultType::PositionLimit) {
+        fault_info = " [ERROR: POSITION LIMIT ON A" + std::to_string(static_cast<int>(pt.feedback.fault.axis) + 1) + "]";
+    }
+
+    LOG_INFO_F("FeedbackPrinter",
+              "[FB] RTState: %d | A1 Cmd: %7.2f deg | A1 Fb: %7.2f deg | A2 Cmd: %7.2f deg | A2 Fb: %7.2f deg%s",
               static_cast<int>(pt.feedback.rt_state),
-              (pt.header.is_target_reached_for_this_point ? 'Y' : 'N'),
-              (pt.header.has_error_at_this_point ? 'Y' : 'N'),
-              pt.command.joint_target[AxisId::A1].angle.toDegrees().toString(1).c_str(), // toString(1) for 1 decimal place
-              pt.feedback.joint_actual[AxisId::A1].angle.toDegrees().toString(1).c_str(),
-              pt.command.cartesian_target.x.toString(3).c_str(), // toString(3) for 3 decimal places
-              pt.feedback.cartesian_actual.x.toString(3).c_str()
+              pt.command.joint_target[AxisId::A1].angle.toDegrees().value(),
+              pt.feedback.joint_actual[AxisId::A1].angle.toDegrees().value(),
+              pt.command.joint_target[AxisId::A2].angle.toDegrees().value(),
+              pt.feedback.joint_actual[AxisId::A2].angle.toDegrees().value(),
+              fault_info.c_str()
     );
 }
-
 
 int main() {
     using namespace RDT;
@@ -41,122 +45,142 @@ int main() {
 
     Logger::setLogLevel(LogLevel::Debug); 
 
-    LOG_INFO("MM_TestMain", "MotionManager Test Application Starting...");
+    LOG_INFO("MM_StressTest", "--- The Ultimate MotionManager Stress Test ---");
 
-    auto fake_motion_iface = std::make_unique<FakeMotionInterface>();
-    
-    unsigned int cycle_period_ms = 500; 
-    MotionManager mm(std::move(fake_motion_iface), cycle_period_ms);
+    // --- 1. SETUP ---
+    // Создаем конфиг, где реальный интерфейс не используется
+    InterfaceConfig config;
+    config.realtime_type = InterfaceConfig::RealtimeInterfaceType::None;
+    config.simulation_initial_joints.fromAngleArray({0.0_rad, 0.0_rad, 0.0_rad, 0.0_rad, 0.0_rad, 0.0_rad});
 
-    LOG_INFO("MM_TestMain", "Starting MotionManager...");
-    mm.start(); 
+    // Создаем модель с тестовыми лимитами
+    KinematicModel model = KinematicModel::createKR6R900(); // Берем геометрию, но лимиты переопределим
+    RobotLimits limits;
+    limits.joint_velocity_limits_deg_s.fill(180.0_deg_s);
+    limits.joint_velocity_limits_deg_s[0] = 50.0_deg_s; // A1 медленная, для теста
+    limits.joint_position_limits_deg.fill({-180.0_deg, 180.0_deg});
+    limits.joint_position_limits_deg[0] = {-90.0_deg, 90.0_deg}; // A1 имеет жесткие лимиты
 
-    std::this_thread::sleep_for(500ms); 
-    if (mm.getCurrentMode() == RTState::Error) {
-        LOG_CRITICAL("MM_TestMain", "MotionManager failed to start properly or connect interface. Exiting.");
-        mm.stop();
+    // Собираем систему
+    auto master_iface = std::make_shared<MasterHardwareInterface>(config);
+    unsigned int cycle_period_ms = 20; // 50 Hz
+    MotionManager mm(master_iface, cycle_period_ms, limits);
+
+    if (!master_iface->connect() || !mm.start()) {
+        LOG_CRITICAL("MM_StressTest", "System failed to start. Aborting.");
         return 1;
     }
-
-    // Thread to consume feedback AND print queue sizes
+    
     std::jthread feedback_consumer_thread([&mm](std::stop_token stoken) {
-        LOG_INFO("FeedbackConsumer", "Feedback consumer thread started.");
-        int print_counter = 0;
         while (!stoken.stop_requested()) {
-            if (auto fb_point_opt = mm.dequeueFeedback()) {
-                printFeedbackPoint(*fb_point_opt);
+            TrajectoryPoint fb_point;
+            if (mm.dequeueFeedback(fb_point)) {
+                printFeedbackPoint(fb_point);
             } else {
                 std::this_thread::sleep_for(10ms); 
             }
-
-            // MODIFICATION: Print queue sizes periodically
-            if (++print_counter % 50 == 0) { // Print every 50 * ~10ms = ~500ms
-                LOG_INFO_F("QueueStatus", "CmdQueue: %zu, FbQueue: %zu",
-                           mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
-            }
-            // END MODIFICATION
         }
-
-        LOG_INFO("FeedbackConsumer", std::format("Feedback consumer thread stopping. Final Queue Sizes - Cmd: {}, Fb: {}", mm.getCommandQueueSize(), mm.getFeedbackQueueSize()));
     });
+    
+    std::this_thread::sleep_for(200ms);
 
-    LOG_INFO_F("MM_TestMain", "Initial Queue Sizes - Cmd: %zu, Fb: %zu", mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
+    // --- 2. VELOCITY LIMIT & SUBDIVISION TEST ---
+    LOG_INFO("MM_StressTest", "\n--- TEST 1: VELOCITY LIMIT & SUBDIVISION ---");
+    LOG_WARN("MM_StressTest", "A1 velocity limit is 50 deg/s. Sending command for 10 deg move in 20ms (=500 deg/s). Expecting subdivision into 10 steps.");
+    TrajectoryPoint fast_pt;
+    fast_pt.command.joint_target[AxisId::A1].angle = (10.0_deg).toRadians();
+    if (!mm.enqueueCommand(fast_pt)) { LOG_ERROR("MM_StressTest", "Test 1 FAILED: Could not enqueue."); }
+    LOG_INFO("MM_StressTest", "Waiting for subdivided move to complete...");
+    std::this_thread::sleep_for(1s); // Даем время на выполнение 10 шагов по 20мс + запас
 
-    LOG_INFO("MM_TestMain", "Enqueuing some JOINT commands...");
-    for (int i = 0; i < 5; ++i) {
-        TrajectoryPoint pt;
-        pt.header.trajectory_id = 1;
-        pt.header.sequence_index = i + 1;
-        pt.header.motion_type = MotionType::JOINT;
-        pt.header.segment_duration = Seconds((i+1) * 0.1);
-
-        std::array<Radians, ROBOT_AXES_COUNT> target_angles;
-        for(size_t j=0; j < ROBOT_AXES_COUNT; ++j) {
-            target_angles[j] = Degrees(10.0 * (i + 1) * (j + 1) ).toRadians().normalized();
-        }
-        pt.command.joint_target.fromAngleArray(target_angles);
-        pt.command.speed_ratio = 0.5 + (i * 0.1); 
-
-        // MODIFICATION: Log queue sizes before pushing
-        LOG_DEBUG_F("MM_TestMain", "Before Enqueue Cmd %d - CmdQueue: %zu, FbQueue: %zu",
-                    i + 1, mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
-        // END MODIFICATION
-        if (!mm.enqueueCommand(pt)) {
-             LOG_ERROR_F("MM_TestMain", "Failed to enqueue command %d", i + 1);
-        }
-        // MODIFICATION: Log queue sizes after pushing
-        LOG_DEBUG_F("MM_TestMain", "After Enqueue Cmd %d - CmdQueue: %zu, FbQueue: %zu",
-                    i + 1, mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
-        // END MODIFICATION
-        std::this_thread::sleep_for(cycle_period_ms * 3ms ); // Enqueue a bit slower than MM processes
+    // --- 3. POSITION LIMIT TEST ---
+    LOG_INFO("MM_StressTest", "\n--- TEST 2: POSITION LIMIT ---");
+    LOG_WARN("MM_StressTest", "A1 position limit is 90 deg. Sending command for 100 deg. Expecting ERROR state.");
+    TrajectoryPoint illegal_pt;
+    illegal_pt.command.joint_target[AxisId::A1].angle = (100.0_deg).toRadians();
+    if (!mm.enqueueCommand(illegal_pt)) { LOG_ERROR("MM_StressTest", "Test 2 FAILED: Could not enqueue."); }
+    std::this_thread::sleep_for(200ms);
+    if (mm.getCurrentMode() != RTState::Error) {
+        LOG_ERROR("MM_StressTest", "Test 2 FAILED: MotionManager did not enter Error state.");
+    } else {
+        LOG_INFO("MM_StressTest", "Test 2 PASSED: MotionManager correctly entered Error state.");
     }
 
-    LOG_INFO_F("MM_TestMain", "After enqueuing loop - CmdQueue: %zu, FbQueue: %zu", mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
-    LOG_INFO("MM_TestMain", "Waiting for commands to process...");
-    std::this_thread::sleep_for(2s); // Increased wait time
-    LOG_INFO_F("MM_TestMain", "After waiting - CmdQueue: %zu, FbQueue: %zu", mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
-
-
-    LOG_INFO("MM_TestMain", "Triggering Emergency Stop...");
-    mm.emergencyStop();
-    std::this_thread::sleep_for(500ms); 
-    LOG_INFO_F("MM_TestMain", "After E-Stop - CmdQueue: %zu, FbQueue: %zu", mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
-
-
-    LOG_INFO("MM_TestMain", "Resetting MotionManager...");
+    // --- 4. RESET TEST ---
+    LOG_INFO("MM_StressTest", "\n--- TEST 3: RESET after error ---");
     mm.reset();
-    std::this_thread::sleep_for(500ms); 
-    LOG_INFO_F("MM_TestMain", "After Reset - CmdQueue: %zu, FbQueue: %zu", mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
-
-
-    LOG_INFO("MM_TestMain", "Enqueuing one more command after reset...");
-    TrajectoryPoint pt_after_reset;
-    pt_after_reset.header.trajectory_id = 2;
-    pt_after_reset.header.sequence_index = 1;
-    pt_after_reset.command.joint_target[AxisId::A1].angle = (-15.0_deg).toRadians();
-    //      
-    uint64_t traj_id_log = pt_after_reset.header.trajectory_id;
-    uint32_t seq_idx_log = pt_after_reset.header.sequence_index;
-    if (!mm.enqueueCommand(pt_after_reset)) { // pt_after_reset    
-        LOG_ERROR_F("MM_TestMain", "Failed to enqueue command after reset (traj_id: %llu, seq: %u).",
-                    traj_id_log, 
-                    seq_idx_log);
+    std::this_thread::sleep_for(200ms);
+     if (mm.getCurrentMode() != RTState::Idle) {
+         LOG_ERROR("MM_StressTest", "Test 3 FAILED: MotionManager is not in Idle state after reset.");
+    } else {
+        LOG_INFO("MM_StressTest", "Test 3 PASSED: MotionManager is in Idle state.");
     }
-    LOG_INFO_F("MM_TestMain", "After final enqueue - CmdQueue: %zu, FbQueue: %zu", mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
+    // Отправляем безопасную команду, чтобы убедиться, что система снова работает
+    TrajectoryPoint recovery_pt;
+    recovery_pt.command.joint_target[AxisId::A1].angle = (0.0_deg).toRadians(); // Возвращаемся в ноль
+    if (!mm.enqueueCommand(recovery_pt)) { LOG_ERROR("MM_StressTest", "Test 3 FAILED: Could not enqueue after reset."); }
+    std::this_thread::sleep_for(1s);
 
+    // --- 5. E-STOP TEST ---
+    LOG_INFO("MM_StressTest", "\n--- TEST 4: E-STOP during a long move ---");
+    LOG_INFO("MM_StressTest", "Sending a long move (A2 -> 90 deg) that will be subdivided...");
+    TrajectoryPoint long_move_pt;
+    long_move_pt.command.joint_target[AxisId::A2].angle = (90.0_deg).toRadians();
+    if (!mm.enqueueCommand(long_move_pt)) { LOG_ERROR("MM_StressTest", "Test 4 FAILED: Could not enqueue long move."); }
+    
+    std::this_thread::sleep_for(200ms); // Даем движению начаться и заполнить микро-очередь
+    LOG_CRITICAL("MM_StressTest", ">>> TRIGGERING E-STOP NOW <<<");
+    mm.emergencyStop();
+    std::this_thread::sleep_for(200ms);
+    
+    if (mm.getCurrentMode() != RTState::Error) {
+        LOG_ERROR("MM_StressTest", "E-Stop test FAILED: MotionManager is not in Error state.");
+    } else {
+        LOG_INFO("MM_StressTest", "E-Stop test PASSED: MotionManager is in Error state.");
+    }
+    // Проверяем, что обе очереди пусты (внутренняя недоступна, но внешняя должна быть пуста)
+    if (mm.getCommandQueueSize() != 0) {
+        LOG_ERROR("MM_StressTest", "E-Stop test FAILED: Main queue was not cleared.");
+    } else {
+        LOG_INFO("MM_StressTest", "E-Stop test PASSED: Main queue cleared.");
+    }
+    // Внутреннюю очередь мы проверим косвенно: после сброса робот не должен продолжать движение.
+    
+    // --- 6. QUEUE OVERFLOW TEST ---
+    LOG_INFO("MM_StressTest", "\n--- TEST 5: QUEUE OVERFLOW ---");
+    mm.reset(); // Сбрасываемся после E-Stop
+    std::this_thread::sleep_for(200ms);
+    LOG_WARN("MM_StressTest", "Spamming the main command queue with 300 commands...");
+    int success_count = 0;
+    for (int i = 0; i < 300; ++i) {
+        TrajectoryPoint spam_pt;
+        spam_pt.command.joint_target[AxisId::A3].angle = Degrees(i * 0.1).toRadians();
+        if (mm.enqueueCommand(spam_pt)) {
+            success_count++;
+        }
+    }
+    LOG_INFO_F("MM_StressTest", "Successfully enqueued %d commands. Queue size: %zu.", success_count, mm.getCommandQueueSize());
+    if (success_count > 0 && success_count < 300) {
+        LOG_INFO("MM_StressTest", "Test 5 PASSED: Queue correctly reported overflow.");
+    } else {
+        LOG_ERROR("MM_StressTest", "Test 5 FAILED: Queue overflow behavior is unexpected.");
+    }
+    
+    LOG_INFO("MM_StressTest", "Waiting for queue to drain...");
+    // Ждем, пока MotionManager обработает все, что влезло в очередь
+    while(mm.getCommandQueueSize() > 0 || mm.getCurrentMode() == RTState::Moving) {
+        std::this_thread::sleep_for(100ms);
+    }
 
-    std::this_thread::sleep_for(2s); // Let it process
-    LOG_INFO_F("MM_TestMain", "Before stop - CmdQueue: %zu, FbQueue: %zu", mm.getCommandQueueSize(), mm.getFeedbackQueueSize());
-
-
-    LOG_INFO("MM_TestMain", "Stopping MotionManager and Feedback Consumer...");
+    // --- Завершение ---
+    LOG_INFO("MM_StressTest", "\n--- All tests complete. Shutting down. ---");
     feedback_consumer_thread.request_stop(); 
     mm.stop(); 
 
     if (feedback_consumer_thread.joinable()) {
         feedback_consumer_thread.join();
     }
-    LOG_INFO("MM_TestMain", "All threads joined. Application finished.");
+    LOG_INFO("MM_StressTest", "All threads joined. Application finished.");
 
     return 0;
 }

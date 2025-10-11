@@ -1,132 +1,91 @@
 // RobotController.cpp
 #include "RobotController.h"
-#include <stdexcept> // For std::invalid_argument, std::runtime_error
-#include <vector>    // For std::vector
-#include <chrono>    // For std::chrono literals and types
-#include <thread>    // For std::this_thread::sleep_for
-#include <cmath>     // For std::ceil
-#include <functional> // For std::placeholders
+#include <stdexcept>
 
 namespace RDT {
 
 using namespace RDT::literals;
 using namespace std::chrono_literals;
 
-RobotController::RobotController(std::shared_ptr<TrajectoryPlanner> planner,
-                                 std::shared_ptr<MotionManager> motion_manager,
-                                 std::shared_ptr<KinematicSolver> solver,
+RobotController::RobotController(const InterfaceConfig& hw_config,
+                                 const ControllerConfig& ctrl_config,
+                                 const KinematicModel& model,
                                  std::shared_ptr<StateData> state_data)
-    : planner_(std::move(planner)),
-      motion_manager_(std::move(motion_manager)),
-      solver_(std::move(solver)),
-      state_data_(std::move(state_data)) {
-    if (!planner_) {
-        LOG_CRITICAL(MODULE_NAME, "TrajectoryPlanner dependency is null during construction.");
-        throw std::invalid_argument("RobotController: TrajectoryPlanner cannot be null.");
-    }
-    if (!motion_manager_) {
-        LOG_CRITICAL(MODULE_NAME, "MotionManager dependency is null during construction.");
-        throw std::invalid_argument("RobotController: MotionManager cannot be null.");
-    }
-    if (!solver_) {
-        LOG_CRITICAL(MODULE_NAME, "KinematicSolver dependency is null during construction.");
-        throw std::invalid_argument("RobotController: KinematicSolver cannot be null.");
-    }
+    : state_data_(state_data),
+      config_(ctrl_config) {
+
     if (!state_data_) {
-        LOG_CRITICAL(MODULE_NAME, "StateData dependency is null during construction.");
         throw std::invalid_argument("RobotController: StateData cannot be null.");
     }
+    
+    logControllerMessage("Constructing RobotController and its components...", LogLevel::Info);
+    
+    hw_interface_ = std::make_shared<MasterHardwareInterface>(hw_config);
+    
+    motion_manager_ = std::make_shared<MotionManager>(
+        hw_interface_,
+        config_.motion_manager_cycle_ms,
+        model.getLimits()
+    );
+    
+    solver_ = std::make_shared<KdlKinematicSolver>(model);
+    
+    auto interpolator = std::make_shared<TrajectoryInterpolator>();
+    planner_ = std::make_shared<TrajectoryPlanner>(solver_, interpolator);
+
     logControllerMessage("RobotController instance created.", LogLevel::Info);
 }
 
 RobotController::~RobotController() {
     logControllerMessage("RobotController shutting down...", LogLevel::Info);
-    stopControlLoop(); //    
+    stopControlLoop();
+    if (motion_manager_) motion_manager_->stop();
+    if (hw_interface_) hw_interface_->disconnect();
     logControllerMessage("RobotController shutdown complete.", LogLevel::Info);
-}
-
-void RobotController::logControllerMessage(const std::string& message, LogLevel level) {
-    Logger::log(level, MODULE_NAME, message);
-    if (level >= LogLevel::Error && state_data_) {
-        state_data_->setSystemMessage(message, true);
-    }
-}
-
-void RobotController::startControlLoop() {
- stopControlLoop(); // ,    
-    //  -    stop_token
-    control_thread_ = std::jthread([this](std::stop_token stoken) {
-        this->controlLoop(stoken);
-    });
-    logControllerMessage("Control loop started.", LogLevel::Info);
-}
-
-void RobotController::stopControlLoop() {
-    if (control_thread_.joinable()) {
-        control_thread_.request_stop();
-        control_thread_.join();
-        logControllerMessage("Control loop thread joined.", LogLevel::Info);
-    }
 }
 
 bool RobotController::initialize(const TrajectoryPoint& initial_robot_state_user) {
     logControllerMessage("Initializing RobotController...", LogLevel::Info);
     
     stopControlLoop();
+    if (motion_manager_) motion_manager_->stop();
+    if (hw_interface_) hw_interface_->disconnect();
 
-    //state_data_->reset();
     state_data_->setRobotMode(RobotMode::Initializing);
-
-    active_user_tool_context_ = initial_robot_state_user.header.tool;
-    active_user_base_context_ = initial_robot_state_user.header.base;
-    state_data_->setActiveToolFrame(active_user_tool_context_);
-    state_data_->setActiveBaseFrame(active_user_base_context_);
-
-    TrajectoryPoint initial_state_flange_base;
-    initial_state_flange_base.header.tool = ToolFrame();
-    initial_state_flange_base.header.base = BaseFrame();
-
-    if (initial_robot_state_user.command.joint_target.size() == ROBOT_AXES_COUNT) {
-        initial_state_flange_base.command.joint_target = initial_robot_state_user.command.joint_target;
-    } else {
-        logControllerMessage("Initial state must provide valid joint positions.", LogLevel::Error);
-        state_data_->setRobotMode(RobotMode::Error);
-        return false;
-    }
-
-    try {
-        initial_state_flange_base.command.cartesian_target = solver_->solveFK(initial_state_flange_base.command.joint_target);
-    } catch (const std::exception& e) {
-        logControllerMessage("FK failed for initial joint state: " + std::string(e.what()), LogLevel::Error);
-        state_data_->setRobotMode(RobotMode::Error);
-        return false;
-    }
-
-    state_data_->setCmdTrajectoryPoint(initial_robot_state_user);
-    TrajectoryPoint initial_fb_for_sdata;
-    initial_fb_for_sdata.header = initial_robot_state_user.header;
-    initial_fb_for_sdata.feedback.joint_actual = initial_state_flange_base.command.joint_target;
-    initial_fb_for_sdata.feedback.cartesian_actual = FrameTransformer::calculateTcpInWorld(
-        initial_state_flange_base.command.cartesian_target,
-        active_user_tool_context_.transform
-    );
-    initial_fb_for_sdata.feedback.rt_state = RTState::Idle;
-    state_data_->setFbTrajectoryPoint(initial_fb_for_sdata);
     
-    planner_->setCurrentRobotState(initial_state_flange_base);
-    if (planner_->hasError()) {
-        logControllerMessage("Planner initialization error: " + planner_->getErrorMessage(), LogLevel::Error);
+    if (!hw_interface_->connect()) {
+        logControllerMessage("Hardware interface failed to connect.", LogLevel::Critical);
         state_data_->setRobotMode(RobotMode::Error);
         return false;
     }
+    
+    hw_interface_->setState(initial_robot_state_user.command.joint_target);
 
-    motion_manager_->reset();
     if (!motion_manager_->start()) {
         logControllerMessage("MotionManager failed to start.", LogLevel::Critical);
         state_data_->setRobotMode(RobotMode::Error);
         return false;
     }
+    
+    AxisSet initial_joints = hw_interface_->getLatestFeedback();
+    CartPose initial_flange_pose;
+    if (!solver_->solveFK(initial_joints, initial_flange_pose)) {
+        logControllerMessage("FK failed for initial joint state.", LogLevel::Error);
+        state_data_->setRobotMode(RobotMode::Error);
+        return false;
+    }
 
+    state_data_->setActiveToolFrame(initial_robot_state_user.header.tool);
+    state_data_->setActiveBaseFrame(initial_robot_state_user.header.base);
+
+    TrajectoryPoint initial_fb_for_sdata;
+    initial_fb_for_sdata.header = initial_robot_state_user.header;
+    initial_fb_for_sdata.feedback.joint_actual = initial_joints;
+    initial_fb_for_sdata.feedback.cartesian_actual = FrameTransformer::calculateTcpInWorld(
+        initial_flange_pose, initial_robot_state_user.header.tool.transform
+    );
+    state_data_->setFbTrajectoryPoint(initial_fb_for_sdata);
+    
     startControlLoop();
     state_data_->setRobotMode(RobotMode::Idle);
     state_data_->setSystemMessage("System Initialized. Ready.", false);
@@ -134,15 +93,9 @@ bool RobotController::initialize(const TrajectoryPoint& initial_robot_state_user
     return true;
 }
 
-bool RobotController::executeMotionToTarget(const TrajectoryPoint& target_waypoint_user_frame) {
-    // Fix: Convert radians to degrees manually
-
-    std::string A3_temp = target_waypoint_user_frame.command.joint_target.toJointPoseString();
-    logControllerMessage(A3_temp + " Attempting to execute motion to new target.", LogLevel::Info);
-
-    const RobotMode current_mode = state_data_->getRobotMode();
-    if (current_mode != RobotMode::Idle) {
-        logControllerMessage("Cannot execute motion: Controller not in Idle state. Current mode: " + std::to_string(static_cast<int>(current_mode)), LogLevel::Warning);
+[[nodiscard]] bool RobotController::executeMotionToTarget(const TrajectoryPoint& target_waypoint_user_frame) {
+    if (motion_task_active_.load()) {
+        logControllerMessage("Cannot execute motion: another motion task is already active.", LogLevel::Warning);
         return false;
     }
     if (state_data_->isEstopActive()) {
@@ -157,37 +110,27 @@ bool RobotController::executeMotionToTarget(const TrajectoryPoint& target_waypoi
         planner_->clearError();
     }
 
-    active_user_tool_context_ = target_waypoint_user_frame.header.tool;
-    active_user_base_context_ = target_waypoint_user_frame.header.base;
     current_user_command_context_ = target_waypoint_user_frame;
-    state_data_->setActiveToolFrame(active_user_tool_context_);
-    state_data_->setActiveBaseFrame(active_user_base_context_);
+    state_data_->setActiveToolFrame(target_waypoint_user_frame.header.tool);
+    state_data_->setActiveBaseFrame(target_waypoint_user_frame.header.base);
     state_data_->setCmdTrajectoryPoint(target_waypoint_user_frame);
 
     TrajectoryPoint current_sdata_fb = state_data_->getFbTrajectoryPoint();
     TrajectoryPoint planner_start_state_flange_base;
     planner_start_state_flange_base.command.joint_target = current_sdata_fb.feedback.joint_actual;
-    planner_start_state_flange_base.command.cartesian_target = FrameTransformer::calculateFlangeInWorld(
-        current_sdata_fb.feedback.cartesian_actual,
-        current_sdata_fb.header.tool.transform
-    );
-    planner_start_state_flange_base.header.tool = ToolFrame();
-    planner_start_state_flange_base.header.base = BaseFrame();
-
+    if (!solver_->solveFK(planner_start_state_flange_base.command.joint_target, planner_start_state_flange_base.command.cartesian_target)) {
+        logControllerMessage("Failed to calculate start pose for planner.", LogLevel::Error);
+        return false;
+    }
+    
     planner_->setCurrentRobotState(planner_start_state_flange_base);
-    if (planner_->hasError()) {
-        logControllerMessage("Planner error on set current state: " + planner_->getErrorMessage(), LogLevel::Error);
-        state_data_->setRobotMode(RobotMode::Error);
-        return false;
-    }
-
     if (!planner_->addTargetWaypoint(target_waypoint_user_frame)) {
-        std::string err_msg = "Failed to add target to planner: " + planner_->getErrorMessage();
-        logControllerMessage(err_msg, LogLevel::Error);
+        logControllerMessage("Failed to add target to planner: " + planner_->getErrorMessage(), LogLevel::Error);
         state_data_->setRobotMode(RobotMode::Error);
         return false;
     }
 
+    motion_task_active_.store(true);
     state_data_->setRobotMode(RobotMode::Running);
     logControllerMessage("Motion task initiated.", LogLevel::Info);
     return true;
@@ -195,113 +138,141 @@ bool RobotController::executeMotionToTarget(const TrajectoryPoint& target_waypoi
 
 void RobotController::controlLoop(std::stop_token stoken) {
     last_feedback_processing_time_ = std::chrono::steady_clock::now();
-
     while (!stoken.stop_requested()) {
         auto loop_start_time = std::chrono::steady_clock::now();
         
-        if ((loop_start_time - last_feedback_processing_time_) >= FEEDBACK_PROCESSING_INTERVAL) {
+        // *** ИСПРАВЛЕНИЕ: Используем поле config_ ***
+        if ((loop_start_time - last_feedback_processing_time_) >= config_.feedback_processing_interval) {
             processFeedbackBatch();
             last_feedback_processing_time_ = loop_start_time;
         }
-
-        const RobotMode current_mode = state_data_->getRobotMode();
-
-        switch (current_mode) {
-            case RobotMode::Running:
-                processMotionTask();
-                break;
-            case RobotMode::Idle:
-            case RobotMode::Initializing:
-            case RobotMode::EStop:
-            case RobotMode::Error:
-                // No action needed in these states
-                break;
+        
+        if (motion_task_active_.load()) {
+            processMotionTask();
         }
 
         auto loop_end_time = std::chrono::steady_clock::now();
         auto duration = loop_end_time - loop_start_time;
-        if (duration < CONTROL_LOOP_PERIOD) {
-            std::this_thread::sleep_for(CONTROL_LOOP_PERIOD - duration);
-        } else {
-             LOG_WARN_F(MODULE_NAME, "Control loop overrun! Duration: %lld ms",
-                       std::chrono::duration_cast<std::chrono::milliseconds>(duration).count());
+        // *** ИСПРАВЛЕНИЕ: Используем поле config_ ***
+        if (duration < config_.control_loop_period) {
+            std::this_thread::sleep_for(config_.control_loop_period - duration);
         }
     }
 }
 
+// *** MODIFIED: Упрощенный обработчик батча обратной связи ***
 void RobotController::processFeedbackBatch() {
-    std::vector<TrajectoryPoint> feedback_batch;
-    while (auto fb_opt = motion_manager_->dequeueFeedback()) {
-        feedback_batch.push_back(*fb_opt);
-    }
-    if (feedback_batch.empty()) {
-        return;
+    TrajectoryPoint latest_feedback;
+    bool has_new_feedback = false;
+    while (motion_manager_->dequeueFeedback(latest_feedback)) {
+        has_new_feedback = true;
     }
 
-    TrajectoryPoint& latest_feedback = feedback_batch.back();
+    if (!has_new_feedback) {
+        return; // No new data to process
+    }
+
+    // --- ШАГ 1: Делегируем обработку ошибок ---
+    if (latest_feedback.feedback.fault.type != FaultType::None) {
+        processFault(latest_feedback.feedback.fault);
+    }
+
+    // --- ШАГ 2: Обновляем StateData (как и раньше) ---
     TrajectoryPoint fb_for_sdata;
-    
-    // Header  Command      
     fb_for_sdata.header = current_user_command_context_.header;
-    fb_for_sdata.command = current_user_command_context_.command;
-    fb_for_sdata.feedback.joint_actual = latest_feedback.feedback.joint_actual;
-    fb_for_sdata.feedback.rt_state = latest_feedback.feedback.rt_state;
+    fb_for_sdata.feedback = latest_feedback.feedback;
 
-    try {
-        // FK        
-        CartPose flange_pose = solver_->solveFK(latest_feedback.feedback.joint_actual);
-        //     TCP    
+    CartPose flange_pose;
+    if (solver_->solveFK(fb_for_sdata.feedback.joint_actual, flange_pose)) {
         fb_for_sdata.feedback.cartesian_actual = FrameTransformer::calculateTcpInWorld(
-            flange_pose,
-            active_user_tool_context_.transform
-        );
-    } catch (const std::exception& e) {
-        logControllerMessage("FK failed for feedback processing: " + std::string(e.what()), LogLevel::Error);
-        state_data_->setRobotMode(RobotMode::Error);
-        return;
+            flange_pose, state_data_->getActiveToolFrame().transform);
+    } else {
+        logControllerMessage("FK failed during feedback processing.", LogLevel::Warning);
     }
-
-    LOG_DEBUG_F(MODULE_NAME, "Updating StateData with latest feedback from a batch of %zu points.", feedback_batch.size());
     state_data_->setFbTrajectoryPoint(fb_for_sdata);
 
-    //  RobotMode,         /EStop
-    RobotMode current_mode = state_data_->getRobotMode();
-    if (current_mode != RobotMode::Error && current_mode != RobotMode::EStop) {
-        //state_data_->setRobotMode(static_cast<RobotMode>(latest_feedback.feedback.rt_state));
+    // Обновляем RobotMode только если не в критическом состоянии
+    if (state_data_->getRobotMode() != RobotMode::Error && state_data_->getRobotMode() != RobotMode::EStop) {
+        // Преобразуем RTState (0,2,4..) в RobotMode (0,1,3..)
+        switch(latest_feedback.feedback.rt_state) {
+            case RTState::Idle:
+                // Если планировщик тоже закончил, то мы реально Idle
+                if (planner_->isCurrentSegmentDone()) {
+                    state_data_->setRobotMode(RobotMode::Idle);
+                }
+                break;
+            case RTState::Moving:
+                state_data_->setRobotMode(RobotMode::Running);
+                break;
+            case RTState::Error:
+                state_data_->setRobotMode(RobotMode::Error);
+                break;
+            default:
+                break;
+        }
     }
 }
+
+
+// *** NEW: Выделенный обработчик ошибок ***
+void RobotController::processFault(const FaultData& fault) {
+    std::stringstream ss;
+
+    switch (fault.type) {
+        case FaultType::PositionLimit:
+            ss << "CRITICAL ERROR: Position Limit on Axis " << (static_cast<int>(fault.axis) + 1)
+               << ". Commanded: " << fault.actual_position_deg.toString(2)
+               << ", Limit: " << fault.limit_position_deg.toString(2);
+            
+            logControllerMessage(ss.str(), LogLevel::Error);
+            motion_task_active_.store(false); // Немедленно остановить текущую задачу
+            state_data_->setRobotMode(RobotMode::Error); // Перевести систему в состояние ошибки
+            break;
+
+        case FaultType::VelocityLimit:
+            ss << "WARNING: Velocity Limit on Axis " << (static_cast<int>(fault.axis) + 1)
+               << ". Required: " << fault.actual_velocity_deg_s.toString(1)
+               << ", Limit: " << fault.limit_velocity_deg_s.toString(1);
+            
+            logControllerMessage(ss.str(), LogLevel::Warning);
+            // Ничего не делаем, движение не останавливаем. MotionManager уже справился.
+            break;
+
+        case FaultType::None:
+            // Ничего не делаем
+            break;
+    }
+}
+
 
 void RobotController::processMotionTask() {
     if (planner_->hasError()) {
         logControllerMessage("Task failed (planner error): " + planner_->getErrorMessage(), LogLevel::Error);
+        motion_task_active_.store(false);
         state_data_->setRobotMode(RobotMode::Error);
         return;
     }
 
     if (planner_->isCurrentSegmentDone()) {
         logControllerMessage("Motion task completed. Controller to Idle.", LogLevel::Info);
+        motion_task_active_.store(false);
         state_data_->setRobotMode(RobotMode::Idle);
         return;
     }
 
-    const auto max_points_per_window = static_cast<std::size_t>(std::ceil(PLANNER_WINDOW_DURATION.value() / PLANNER_DT_SAMPLE.value()));
-    const std::size_t desired_mm_buffer_level = max_points_per_window * 1; 
-
-    if (motion_manager_->getCommandQueueSize() < desired_mm_buffer_level) {
-        std::vector<TrajectoryPoint> window = planner_->getNextPointWindow(PLANNER_DT_SAMPLE, PLANNER_WINDOW_DURATION);
-
+    if (motion_manager_->getCommandQueueSize() < 10) {
+        // *** ИСПРАВЛЕНИЕ: Используем поле config_ ***
+        std::vector<TrajectoryPoint> window = planner_->getNextPointWindow(config_.planner_dt_sample, config_.planner_window_duration);
         if (planner_->hasError()) {
             logControllerMessage("Task failed (planner window gen error): " + planner_->getErrorMessage(), LogLevel::Error);
+            motion_task_active_.store(false);
             state_data_->setRobotMode(RobotMode::Error);
             return;
         }
-
-        if (!window.empty()) {
-            for (const TrajectoryPoint& tp : window) {
-                if (!motion_manager_->enqueueCommand(tp)) {
-                    logControllerMessage("Failed to enqueue point to MotionManager (queue full).", LogLevel::Warning);
-                    break;
-                }
+        for (const auto& tp : window) {
+            if (!motion_manager_->enqueueCommand(tp)) {
+                logControllerMessage("Failed to enqueue point to MotionManager (queue full).", LogLevel::Warning);
+                break;
             }
         }
     }
@@ -309,81 +280,141 @@ void RobotController::processMotionTask() {
 
 void RobotController::cancelCurrentMotion() {
     logControllerMessage("Cancel current motion requested.", LogLevel::Info);
-    
+    motion_task_active_.store(false);
     state_data_->setRobotMode(RobotMode::Idle);
-    state_data_->setSystemMessage("Motion task cancelled by user.", false);
-
-    if (motion_manager_) {
-        motion_manager_->reset();
-    }
-    
-    //       
-    TrajectoryPoint last_known_fb_sdata = state_data_->getFbTrajectoryPoint();
-    TrajectoryPoint planner_stop_state_flange_base;
-    planner_stop_state_flange_base.command.joint_target = last_known_fb_sdata.feedback.joint_actual;
-    try {
-        planner_stop_state_flange_base.command.cartesian_target = solver_->solveFK(planner_stop_state_flange_base.command.joint_target);
-    } catch(const std::exception& e) {
-        logControllerMessage("Error on FK during cancel: " + std::string(e.what()), LogLevel::Error);
-    }
-    planner_stop_state_flange_base.header.tool = ToolFrame();
-    planner_stop_state_flange_base.header.base = BaseFrame();
-    planner_->setCurrentRobotState(planner_stop_state_flange_base);
-    if(planner_->hasError()){
+    if (motion_manager_) motion_manager_->reset();
+    if (planner_) {
         planner_->clearError();
+        TrajectoryPoint current_fb = state_data_->getFbTrajectoryPoint();
+        current_fb.command.joint_target = current_fb.feedback.joint_actual;
+        planner_->setCurrentRobotState(current_fb);
     }
-    logControllerMessage("Motion cancelled. Planner reset to last known position.", LogLevel::Info);
 }
 
 void RobotController::emergencyStop() {
     logControllerMessage("EMERGENCY STOP ACTIVATED!", LogLevel::Critical);
-    
+    motion_task_active_.store(false);
     state_data_->setEstopState(true);
     state_data_->setRobotMode(RobotMode::EStop);
-    state_data_->setSystemMessage("EMERGENCY STOP ACTIVATED", true);
-    
-    if (motion_manager_) {
-        motion_manager_->emergencyStop(); 
-    }
-    if (planner_ && planner_->hasError()){
-        planner_->clearError();
-    }
+    if (motion_manager_) motion_manager_->emergencyStop();
 }
 
 void RobotController::reset() {
-    logControllerMessage("Full system reset initiated.", LogLevel::Info);
-    
-    stopControlLoop();
-
-    if (motion_manager_) {
-        motion_manager_->stop();
-        motion_manager_->reset();
-    }
-    if (planner_) {
-        planner_->clearError();
-    }
-    
-    //state_data_->reset();
-    state_data_->setRobotMode(RobotMode::Initializing);
-    state_data_->setSystemMessage("System reset. Awaiting re-initialization.", false);
-
-    logControllerMessage("System reset complete. Call initialize() to restart.", LogLevel::Info);
+    logControllerMessage("Soft reset initiated.", LogLevel::Info);
+    cancelCurrentMotion();
+    state_data_->setEstopState(false);
+    state_data_->setSystemMessage("System Reset.", false);
+    state_data_->setRobotMode(RobotMode::Idle);
 }
 
-ControllerState RobotController::getInternalControllerState() const {
-    RobotMode mode = state_data_->getRobotMode();
-    switch (mode) {
-        case RobotMode::Idle:         return ControllerState::Idle;
-        case RobotMode::Running:       return ControllerState::Running;
-        case RobotMode::Initializing: return ControllerState::Initializing;
-        case RobotMode::EStop:        return ControllerState::Error;
-        case RobotMode::Error:        return ControllerState::Error;
-        default:                      return ControllerState::Idle;
+RobotController::SwitchRequestResult RobotController::requestModeSwitch(MasterHardwareInterface::ActiveMode mode) {
+    if (isMotionTaskActive()) {
+        logControllerMessage("Cannot switch mode while motion task is active.", LogLevel::Error);
+        return SwitchRequestResult::Error;
     }
+    if (hw_interface_->getCurrentMode() == mode) {
+        return SwitchRequestResult::AlreadyInMode;
+    }
+
+    auto result = hw_interface_->switchTo(mode);
+
+    if (result == MasterHardwareInterface::SwitchResult::NotInSync) {
+        logControllerMessage("Mode switch rejected: robot is not synchronized.", LogLevel::Warning);
+        return SwitchRequestResult::NotInSync;
+    }
+    if (result == MasterHardwareInterface::SwitchResult::Success) {
+        AxisSet new_feedback_joints = hw_interface_->getLatestFeedback();
+        TrajectoryPoint current_fb = state_data_->getFbTrajectoryPoint();
+        current_fb.feedback.joint_actual = new_feedback_joints;
+        
+        CartPose flange_pose;
+        if (solver_->solveFK(new_feedback_joints, flange_pose)) {
+            current_fb.feedback.cartesian_actual = FrameTransformer::calculateTcpInWorld(
+                flange_pose, state_data_->getActiveToolFrame().transform);
+        }
+        state_data_->setFbTrajectoryPoint(current_fb);
+        return SwitchRequestResult::Success;
+    }
+    return SwitchRequestResult::Error;
+}
+
+void RobotController::forceSync() {
+    if (isMotionTaskActive()) {
+        logControllerMessage("Cannot sync while motion task is active.", LogLevel::Warning);
+        return;
+    }
+    hw_interface_->forceSyncSimulationToReal();
+    AxisSet synced_joints = hw_interface_->getLatestFeedback();
+    TrajectoryPoint current_fb = state_data_->getFbTrajectoryPoint();
+    current_fb.feedback.joint_actual = synced_joints;
+    
+    CartPose flange_pose;
+    if (solver_->solveFK(synced_joints, flange_pose)) {
+        current_fb.feedback.cartesian_actual = FrameTransformer::calculateTcpInWorld(
+            flange_pose, state_data_->getActiveToolFrame().transform);
+    }
+    state_data_->setFbTrajectoryPoint(current_fb);
+    logControllerMessage("Simulation state synchronized with real hardware.", LogLevel::Info);
+}
+
+
+ControllerState RobotController::getInternalControllerState() const {
+    if (state_data_->isEstopActive() || state_data_->hasActiveError()) {
+        return ControllerState::Error;
+    }
+    if (motion_task_active_.load()) {
+        return ControllerState::Running;
+    }
+    if (state_data_->getRobotMode() == RobotMode::Initializing) {
+        return ControllerState::Initializing;
+    }
+    return ControllerState::Idle;
 }
 
 bool RobotController::isMotionTaskActive() const {
-    return state_data_->getRobotMode() == RobotMode::Running;
+    return motion_task_active_.load();
 }
+
+void RobotController::startControlLoop() {
+    stopControlLoop();
+    control_thread_ = std::jthread([this](std::stop_token stoken) {
+        this->controlLoop(stoken);
+    });
+    logControllerMessage("Control loop started.", LogLevel::Info);
+}
+
+void RobotController::stopControlLoop() {
+    if (control_thread_.joinable()) {
+        control_thread_.request_stop();
+        control_thread_.join();
+        logControllerMessage("Control loop thread joined.", LogLevel::Info);
+    }
+}
+
+void RobotController::logControllerMessage(const std::string& message, LogLevel level) {
+    // *** ИСПРАВЛЕНИЕ: Макрос логгера требует 3 аргумента ***
+    Logger::log(level, MODULE_NAME, message);
+    if (level >= LogLevel::Error && state_data_) {
+        state_data_->setSystemMessage(message, true);
+    }
+}
+
+
+// *** НОВАЯ РЕАЛИЗАЦИЯ: Методы-прокси ***
+MasterHardwareInterface::ActiveMode RobotController::getActiveMode() const {
+    if (hw_interface_) {
+        return hw_interface_->getCurrentMode();
+    }
+    return MasterHardwareInterface::ActiveMode::Simulation; // Безопасное значение по умолчанию
+}
+
+bool RobotController::isRealInterfaceConnected() const {
+    if (hw_interface_) {
+        // Этот метод нужно добавить в MasterHardwareInterface
+        return hw_interface_->isRealInterfaceConnected();
+    }
+    return false;
+}
+
 
 } // namespace RDT

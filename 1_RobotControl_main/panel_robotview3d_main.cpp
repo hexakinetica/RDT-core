@@ -120,7 +120,7 @@ int main(int argc, char *argv[]) {
     robotView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     QPushButton *btnLoadModel = new QPushButton("Load Robot Model");
-    QObject::connect(btnLoadModel, &QPushButton::clicked, robotView, &Panel_RobotView3D::loadmodel);
+    QObject::connect(btnLoadModel, &QPushButton::clicked, robotView, &Panel_RobotView3D::loadmodel_r900);
     controlsLayout->addWidget(btnLoadModel);
 
     QPushButton *btnInitRobotVisuals = new QPushButton("Initialize Robot Visuals");

@@ -1,175 +1,157 @@
-// GUI_App_main.cpp
+// RobotControl_main.cpp
 #include <QApplication>
 #include <QMainWindow>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QFrame>
-#include <QTimer>     // QTimer from Adapter uses this
+#include <QMessageBox>
+#include <QTimer>
 #include <QDebug>
 #include <iostream>
-#include <memory>     // For std::shared_ptr, std::make_shared, std::make_unique
+#include <memory>
 
 // --- RDT Core Components ---
 #include "DataTypes.h"
 #include "Units.h"
 #include "Logger.h"
-#include "RDT_Qt_MetaTypes.h" // IMPORTANT: For Qt to handle RDT types in signals/slots
-
+#include "RDT_Qt_MetaTypes.h"
 #include "StateData.h"
-#include "FrameTransformer.h" // Used statically by RobotController/Planner
 #include "KinematicModel.h"
-#include "KdlKinematicSolver.h"
-#include "TrajectoryInterpolator.h"
-#include "TrajectoryPlanner.h"
-#include "FakeMotionInterface.h"  // Using Fake for this integrated test
-#include "MotionManager.h"
+#include "RobotConfig.h"
 #include "RobotController.h"
 
 // --- Adapter & GUI Panels ---
-#include "Adapter_RobotController.h" // Our new adapter
+#include "Adapter_RobotController.h"
 #include "Panel_StateDisplay.h"
 #include "Panel_StatusBar.h"
 #include "Panel_Teach.h"
 #include "Panel_JogControl.h"
 #include "Panel_RobotView3D.h"
 
-
-// For convenience
 using namespace RDT;
 using namespace RDT::literals;
-using namespace std::chrono_literals;
-
 
 int main(int argc, char* argv[]) {
     QApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
     QApplication app(argc, argv);
 
-    // 1. Initialize RDT MetaTypes for Qt and Logger
     RDT::registerRdtMetaTypes();
-    RDT::Logger::setLogLevel(RDT::LogLevel::Debug); // Set desired log level
+    Logger::setLogLevel(LogLevel::Info);
 
-    LOG_INFO("GUI_AppMain", "--- Full GUI Application with RobotController Backend Starting ---");
+    LOG_INFO("GUI_AppMain", "--- Full GUI Application Starting (Old-Style Init) ---");
 
-    // 2. Create Core RDT Components (the "backend")
-    LOG_INFO("GUI_AppMain", "Creating RDT core components...");
-    auto state_data_ptr = std::make_shared<RDT::StateData>();
+    bool LAUNCH_EMULATOR_AUTOMATICALLY = true;
+    // --- 0. AUTO-LAUNCH EMULATOR (New Feature) ---
+    if (LAUNCH_EMULATOR_AUTOMATICALLY) {
+        LOG_INFO("TestMain", "Automatically launching Python emulator in the background...");
+        // This command assumes the executable is run from a 'build' directory
+        // located at the project root. The '&' makes it run in the background on Linux.
+        const char* command = "xterm -T \"Robot Emulator\" -hold -e \"python3  /home/rdt/Desktop/RDT/RobotControl_MVP/motion_interface_hal/robot_utility.py --emulator\" &";
+        int result = std::system(command);
+        if (result != 0) {
+            LOG_ERROR("TestMain", "Failed to launch emulator script. Please run it manually.");
+            // We can choose to continue or exit. Let's try to continue.
+        }
+        LOG_INFO("TestMain", "Waiting 1 second for emulator to initialize...");
     
-    RDT::KinematicModel kuka_model = RDT::KinematicModel::createKR6R900();
-    auto solver_ptr = std::make_shared<RDT::KdlKinematicSolver>(kuka_model);
-    auto interpolator_ptr = std::make_shared<RDT::TrajectoryInterpolator>();
-    auto planner_ptr = std::make_shared<RDT::TrajectoryPlanner>(solver_ptr, interpolator_ptr);
+    } else {
+        LOG_INFO("TestMain", "Manual mode: Ensure python/robot_utility.py --emulator is running.");
+    }
+
+
+
+    // ============================================================================
+    // 1. КОНФИГУРАЦИЯ
+    // ============================================================================
+    InterfaceConfig hw_config;
+    hw_config.realtime_type = InterfaceConfig::RealtimeInterfaceType::Udp;
+    hw_config.simulation_initial_joints.fromAngleArray({0.0_rad, (-30.0_deg).toRadians(), (30.0_deg).toRadians(), 0.0_rad, 0.0_rad, 0.0_rad});
+
+    ControllerConfig ctrl_config;
     
-    unsigned int mm_cycle_period_ms = 100; // MotionManager cycle period
-    auto motion_interface_ptr = std::make_unique<RDT::FakeMotionInterface>();
-    auto motion_manager_ptr = std::make_shared<RDT::MotionManager>(std::move(motion_interface_ptr), mm_cycle_period_ms);
+    // ============================================================================
+    // 2. СОЗДАНИЕ КОМПОНЕНТОВ
+    // ============================================================================
+    LOG_INFO("GUI_AppMain", "Creating components...");
     
-    auto robot_controller_ptr = std::make_shared<RDT::RobotController>(
-        planner_ptr, motion_manager_ptr, solver_ptr, state_data_ptr
-    );
-    LOG_INFO("GUI_AppMain", "RDT core components created.");
-
-    // 3. Create Adapter_RobotController
-    LOG_INFO("GUI_AppMain", "Creating Adapter_RobotController...");
-    // Adapter_RobotController* adapter = new Adapter_RobotController(robot_controller_ptr, state_data_ptr, &app); // Parented to app
-    // Making it a unique_ptr for RAII, but ensure QObject parentage if needed for auto-delete by Qt (e.g. parent to main_window)
-    auto adapter_ptr = std::make_unique<RDT::Adapter_RobotController>(robot_controller_ptr, state_data_ptr);
-    LOG_INFO("GUI_AppMain", "Adapter_RobotController created.");
-
-
-    // 4. Create GUI Panels
-    LOG_INFO("GUI_AppMain", "Creating GUI panels...");
-    auto* teach_panel_logic = new RDT::Panel_Teach(); 
+    auto state_data = std::make_shared<StateData>();
+    KinematicModel kuka_model = KinematicModel::createKR6R900();
+    auto robot_controller = std::make_shared<RobotController>(hw_config, ctrl_config, kuka_model, state_data);
+    
+    auto* adapter = new Adapter_RobotController(robot_controller, state_data, &app);
+    
+    auto* teach_panel_logic = new Panel_Teach(); 
     QWidget* teach_panel_widget = teach_panel_logic->getWidget();
-    teach_panel_widget->setMinimumWidth(400);
-    teach_panel_widget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
-
     auto* robot_view_panel = new Panel_RobotView3D();
-    robot_view_panel->setMinimumSize(700, 500);
-    robot_view_panel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    auto* jog_panel = new Panel_JogControl();
+    auto* state_display_panel = new Panel_StateDisplay();
+    auto* status_bar_panel = new Panel_StatusBar();
 
-    auto* jog_panel = new RDT::Panel_JogControl();
-    jog_panel->setFixedWidth(300);
+    // ============================================================================
+    // 3. СБОРКА ГЛАВНОГО ОКНА
+    // ============================================================================
+    QMainWindow main_window;
+    main_window.setWindowTitle("RDT - Industrial Robot Control Panel");
+    main_window.resize(1800, 1000);
 
-    auto* state_display_panel = new RDT::Panel_StateDisplay();
-    auto* status_bar_panel = new RDT::Panel_StatusBar();
-    status_bar_panel->setFixedHeight(35);
-    LOG_INFO("GUI_AppMain", "GUI panels created.");
-
-    // 5. Connect Panels to Adapter
-    LOG_INFO("GUI_AppMain", "Connecting panels to Adapter_RobotController...");
-    adapter_ptr->connectStateDisplayPanel(state_display_panel);
-    adapter_ptr->connectRobotView3D(robot_view_panel);
-    adapter_ptr->connectStatusBarPanel(status_bar_panel);
-    adapter_ptr->connectTeachPanel(teach_panel_logic); // Pass the logic object
-    adapter_ptr->connectJogPanel(jog_panel);
-    LOG_INFO("GUI_AppMain", "Panels connected to Adapter.");
-
-    // 6. Assemble Main Window
-    LOG_INFO("GUI_AppMain", "Assembling main window...");
-    QFrame* top_main_area_frame = new QFrame;
-    QGridLayout* top_main_grid_layout = new QGridLayout(top_main_area_frame);
-    top_main_grid_layout->setContentsMargins(0,0,0,0); top_main_grid_layout->setSpacing(5);
+    auto* central_widget = new QWidget();
+    main_window.setCentralWidget(central_widget);
+    
+    auto* top_main_area_frame = new QFrame(central_widget);
+    auto* top_main_grid_layout = new QGridLayout(top_main_area_frame);
+    top_main_grid_layout->setContentsMargins(0,0,0,0); 
+    top_main_grid_layout->setSpacing(5);
     top_main_grid_layout->addWidget(teach_panel_widget, 0, 0);
     top_main_grid_layout->addWidget(robot_view_panel, 0, 1);
     top_main_grid_layout->addWidget(jog_panel, 0, 2);
-    top_main_grid_layout->setColumnStretch(0, 3); top_main_grid_layout->setColumnStretch(1, 6); top_main_grid_layout->setColumnStretch(2, 2);
+    top_main_grid_layout->setColumnStretch(1, 1);
 
-    QVBoxLayout* main_vertical_layout = new QVBoxLayout;
-    main_vertical_layout->setContentsMargins(5,5,5,5); main_vertical_layout->setSpacing(5);
+    auto* main_vertical_layout = new QVBoxLayout(central_widget);
+    main_vertical_layout->setContentsMargins(5,5,5,5); 
+    main_vertical_layout->setSpacing(5);
     main_vertical_layout->addWidget(status_bar_panel);
     main_vertical_layout->addWidget(top_main_area_frame, 1);
     main_vertical_layout->addWidget(state_display_panel);
-
-    QWidget* central_widget = new QWidget;
-    central_widget->setLayout(main_vertical_layout);
-
-    QMainWindow main_window;
-    main_window.setWindowTitle("Industrial Robot Control GUI - RDT Integrated");
-    main_window.setCentralWidget(central_widget);
-    main_window.resize(1800, 1000); // Larger window
-    main_window.show();
-    LOG_INFO("GUI_AppMain", "Main window assembled and shown.");
     
-    // Set adapter parent after main_window is created for proper QObject cleanup
-    // adapter_ptr->setParent(&main_window); // if adapter_ptr was raw, not needed for unique_ptr if main_window outlives it.
-
-    // 7. Initialize RobotController backend via Adapter and start GUI updates
-    LOG_INFO("GUI_AppMain", "Initializing backend via Adapter_RobotController...");
-    RDT::TrajectoryPoint initial_user_cmd_for_rc;
-    initial_user_cmd_for_rc.header.data_type = RDT::WaypointDataType::JOINT_DOMINANT_CMD;
-    std::array<RDT::Radians, RDT::ROBOT_AXES_COUNT> initial_angles = {
-       // 0.0_rad, (-90.0_deg).toRadians(), (90.0_deg).toRadians(), 0.0_rad, (90.0_deg).toRadians(), 0.0_rad
-        0.0_rad, (0.0_deg).toRadians(), (0.0_deg).toRadians(), 0.0_rad, (0.0_deg).toRadians(), 0.0_rad
-    };
-    initial_user_cmd_for_rc.command.joint_target.fromAngleArray(initial_angles);
-    initial_user_cmd_for_rc.header.tool = RDT::ToolFrame(RDT::CartPose{0.0_m, 0.0_m, 0.15_m}, "InitTool");
-    initial_user_cmd_for_rc.header.base = RDT::BaseFrame(RDT::CartPose{}, "InitBase"); // T_robotBase_User = Identity
-
-    if (adapter_ptr->initializeBackendAndStartGUIUpdates(initial_user_cmd_for_rc, 100 /*ms update interval*/)) {
-        LOG_INFO("GUI_AppMain", "Backend initialized successfully via Adapter.");
-        // Load 3D model after backend init (which starts MM, which might start interface)
-        if (robot_view_panel->loadmodel()) { // Path is hardcoded in Panel_RobotView3D for now
-             LOG_INFO("GUI_AppMain", "Robot 3D model loaded.");
+    // ============================================================================
+    // 4. ПОДКЛЮЧЕНИЕ ПАНЕЛЕЙ К АДАПТЕРУ
+    // ============================================================================
+    adapter->connectStateDisplayPanel(state_display_panel);
+    adapter->connectRobotView3D(robot_view_panel);
+    adapter->connectStatusBarPanel(status_bar_panel);
+    adapter->connectTeachPanel(teach_panel_logic);
+    adapter->connectJogPanel(jog_panel);
+    
+    // ============================================================================
+    // 5. ИНИЦИАЛИЗАЦИЯ И ЗАПУСК (В СТИЛЕ СТАРОГО ФАЙЛА)
+    // ============================================================================
+    
+    // Сначала показываем окно
+    main_window.show();
+    LOG_INFO("GUI_AppMain", "Main window shown. Initializing backend...");
+    
+    // Затем, до app.exec(), вызываем инициализацию, которая внутри загрузит модель
+    TrajectoryPoint initial_cmd;
+    initial_cmd.command.joint_target = hw_config.simulation_initial_joints;
+    
+    if (adapter->initializeBackend(initial_cmd)) {
+        LOG_INFO("GUI_AppMain", "Backend initialized successfully.");
+        
+        // *** КЛЮЧЕВОЙ МОМЕНТ: Загружаем модель здесь, как в старом файле ***
+        if (robot_view_panel->loadmodel_r900()) {
+            LOG_INFO("GUI_AppMain", "Robot 3D model loaded.");
+            // И сразу после загрузки отправляем команду на обновление позы
+            adapter->currentJointsChanged(initial_cmd.command.joint_target);
         } else {
             LOG_WARN("GUI_AppMain", "Failed to load robot 3D model.");
         }
+
     } else {
-        LOG_CRITICAL("GUI_AppMain", "Backend initialization FAILED via Adapter. GUI may not function correctly.");
-        // Handle critical error, maybe close app or show error dialog
+        QMessageBox::critical(&main_window, "Startup Error", "Failed to initialize robot controller backend!");
+        return -1;
     }
-
-    LOG_INFO("GUI_AppMain", "GUI event loop started. Close main window to exit.");
-    int result = app.exec();
-
-    LOG_INFO("GUI_AppMain", "GUI Application Shutting Down...");
-    // RobotController's jthread will be joined in its destructor when adapter_ptr (and then robot_controller_ptr) go out of scope.
-    // Qt will handle deletion of QWidgets based on parent-child relationships.
-    // delete teach_panel_logic; // Only if it was not parented to a QWidget that Qt manages.
-                               // If teach_panel_widget was parented, and teach_panel_logic is QObject parented
-                               // to teach_panel_widget, it should be fine.
-                               // Or, if teach_panel_logic is parented to adapter_ptr, and adapter_ptr is parented to main_window.
-
-    LOG_INFO("GUI_AppMain", "GUI Application End.");
-    return result;
+    
+    LOG_INFO("GUI_AppMain", "Starting event loop...");
+    return app.exec();
 }

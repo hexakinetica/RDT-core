@@ -1,44 +1,56 @@
 // Panel_StatusBar.cpp
 #include "Panel_StatusBar.h"
-#include <QPalette>     // For setting background color
-#include <QDebug>       // For qDebug (can be replaced by RDT::Logger for panel internal debug)
+#include <QPalette>
 
 namespace RDT {
 
-// For convenience
-using namespace RDT::literals;
-
 Panel_StatusBar::Panel_StatusBar(QWidget* parent) : QWidget(parent) {
     setupUI();
-    // Set initial default display values
+    // Set initial values
     onSetRobotModeRDT(RobotMode::Initializing);
     onSetSystemMessageRDT("System Starting...", false);
-    onSetSpeedRatioRDT(1.0); // 100%
+    onSetSpeedRatioRDT(1.0);
     onSetEstopStatusRDT(false);
     onSetConnectionStatusRDT(false);
-    LOG_DEBUG(MODULE_NAME, "Panel_StatusBar created and UI set up.");
+    onActiveModeChanged("Simulation", false); // Initial mode
 }
 
 void Panel_StatusBar::setupUI() {
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(8, 4, 8, 4); // Adjusted margins
-    layout->setSpacing(15);                 // Adjusted spacing
+    layout->setContentsMargins(8, 4, 8, 4);
+    layout->setSpacing(10);
 
-    QFont labelFont("Arial", 9);
     QFont valueFont("Arial", 9, QFont::Bold);
 
-    mode_label_ = new QLabel("System:", this);
-    mode_label_->setFont(labelFont);
-    sim_real_mode_selector_ = new QComboBox(this);
-    sim_real_mode_selector_->setFont(valueFont);
-    sim_real_mode_selector_->addItem("SIMULATOR");
-    sim_real_mode_selector_->addItem("REAL ROBOT");
-    sim_real_mode_selector_->setToolTip("Select system operation mode (Simulator or Real Hardware)");
-    connect(sim_real_mode_selector_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, [this](int index){
-                emit simRealModeChangedByUser(index == 1); // 1 is REAL ROBOT
-            });
+    // --- Mode Control Elements ---
+    active_mode_label_ = new QLabel("Mode: SIMULATION", this);
+    active_mode_label_->setFont(valueFont);
+    
+    // This button is a placeholder for a future connection sequence
+    btn_connect_real_ = new QPushButton("Connect Real", this);
+    btn_connect_real_->setToolTip("Attempt to connect to the real hardware interface.");
+    btn_connect_real_->setEnabled(false); // Disabled for this implementation
+    
+    btn_switch_to_sim_ = new QPushButton("Switch to Sim", this);
+    btn_switch_to_sim_->setToolTip("Switch control to the internal simulation.");
 
+    btn_switch_to_real_ = new QPushButton("Switch to Real", this);
+    btn_switch_to_real_->setToolTip("Switch control to the real hardware (requires sync).");
+
+    btn_reset_error_ = new QPushButton("Reset Error", this);
+    btn_reset_error_->setToolTip("Resets the controller from an error state.");
+
+    connect(btn_switch_to_sim_, &QPushButton::clicked, this, &Panel_StatusBar::switchToSimRequested);
+    connect(btn_switch_to_real_, &QPushButton::clicked, this, &Panel_StatusBar::switchToRealRequested);
+    connect(btn_reset_error_, &QPushButton::clicked, this, &Panel_StatusBar::resetErrorRequested);
+
+    layout->addWidget(active_mode_label_);
+    layout->addWidget(btn_switch_to_sim_);
+    layout->addWidget(btn_switch_to_real_);
+    layout->addWidget(btn_reset_error_);
+    layout->addSpacing(20);
+
+    // --- State Indicators ---
     robot_state_label_ = new QLabel("State: N/A", this);
     robot_state_label_->setFont(valueFont);
     robot_state_label_->setMinimumWidth(120);
@@ -47,119 +59,92 @@ void Panel_StatusBar::setupUI() {
     speed_label_->setFont(valueFont);
     speed_label_->setMinimumWidth(90);
 
-    connection_label_ = new QLabel("Physically: Disconnected", this);
+    connection_label_ = new QLabel("HW: Disconnected", this);
     connection_label_->setFont(valueFont);
     connection_label_->setMinimumWidth(150);
 
-    system_message_label_ = new QLabel("Status: OK", this); // Was errorLabel_
+    system_message_label_ = new QLabel("Status: OK", this);
     system_message_label_->setFont(valueFont);
-    system_message_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred); // Allow to expand
+    system_message_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 
-    layout->addWidget(mode_label_);
-    layout->addWidget(sim_real_mode_selector_);
-    layout->addSpacing(20);
     layout->addWidget(robot_state_label_);
     layout->addWidget(speed_label_);
-    layout->addStretch(1); // Pushes connection and error to the right
+    layout->addStretch(1);
     layout->addWidget(connection_label_);
-    layout->addSpacing(10);
     layout->addWidget(system_message_label_);
 
-    // Set a distinct background color for the status bar
     setAutoFillBackground(true);
     QPalette pal = palette();
-    pal.setColor(QPalette::Window, QColor(Qt::lightGray).lighter(110)); // Slightly lighter gray
+    pal.setColor(QPalette::Window, QColor(Qt::lightGray).lighter(110));
     setPalette(pal);
-    setFixedHeight(30); // Fixed height
+    setFixedHeight(35);
 }
 
-// --- Public Slots ---
+void Panel_StatusBar::onActiveModeChanged(const QString& modeName, bool isRealConnected) {
+    active_mode_label_->setText("Mode: " + modeName.toUpper());
+    
+    // Button enable/disable logic
+    btn_switch_to_sim_->setEnabled(modeName.compare("Simulation", Qt::CaseInsensitive) != 0);
+    btn_switch_to_real_->setEnabled(modeName.compare("Realtime", Qt::CaseInsensitive) != 0 && isRealConnected);
+}
+
 void Panel_StatusBar::onSetRobotModeRDT(RDT::RobotMode mode) {
     QString modeStr;
+    bool isErrorState = false;
     switch (mode) {
         case RobotMode::Idle:         modeStr = "Idle"; break;
         case RobotMode::Running:      modeStr = "Running"; break;
         case RobotMode::Paused:       modeStr = "Paused"; break;
-        case RobotMode::EStop:        modeStr = "E-STOPPED"; break; // Distinct for EStop
-        case RobotMode::Error:        modeStr = "Error State"; break;
+        case RobotMode::EStop:        modeStr = "E-STOPPED"; isErrorState = true; break;
+        case RobotMode::Error:        modeStr = "Error State"; isErrorState = true; break;
         case RobotMode::Initializing: modeStr = "Initializing"; break;
         case RobotMode::Homing:       modeStr = "Homing"; break;
         case RobotMode::Jogging:      modeStr = "Jogging"; break;
         default:                      modeStr = "Unknown"; break;
     }
     robot_state_label_->setText("State: " + modeStr);
-    LOG_DEBUG_F(MODULE_NAME, "RobotMode display updated to: %s", modeStr.toStdString().c_str());
-
-    // If E-Stop mode, override system message to show E-Stop prominently
-    if (mode == RobotMode::EStop || estop_is_active_) {
-        onSetSystemMessageRDT("EMERGENCY STOP ACTIVE", true);
-    }
+    
+    // Update reset button state based on robot mode
+    error_is_active_ = isErrorState;
+    btn_reset_error_->setEnabled(error_is_active_);
 }
 
 void Panel_StatusBar::onSetSystemMessageRDT(const QString& message, bool isError) {
-    if (estop_is_active_ && !message.contains("EMERGENCY STOP", Qt::CaseInsensitive)) {
-        // Don't let non-EStop messages clear an active E-Stop message unless it's also an EStop message
-        // Or if the error flag is false, indicating EStop might have been cleared
-        if (isError) { // A new error message might be more important
-             system_message_label_->setText("⚠ " + message);
-             system_message_label_->setStyleSheet("color: red; font-weight: bold;");
-             LOG_WARN_F(MODULE_NAME, "System message updated to ERROR (EStop active): %s", message.toStdString().c_str());
-        } else {
-            // Keep EStop message prominent if no new error
-        }
-        return;
-    }
+    // Update reset button state if an error message is received
+    error_is_active_ = isError;
+    btn_reset_error_->setEnabled(error_is_active_);
 
-    if (isError) {
+    if (isError || estop_is_active_) {
         system_message_label_->setText("⚠ " + message);
         system_message_label_->setStyleSheet("color: red; font-weight: bold;");
-        LOG_WARN_F(MODULE_NAME, "System message updated to ERROR: %s", message.toStdString().c_str());
     } else {
         system_message_label_->setText("Status: " + (message.isEmpty() ? "OK" : message));
-        system_message_label_->setStyleSheet("color: black; font-weight: normal;"); // Reset style
-        LOG_INFO_F(MODULE_NAME, "System message updated to STATUS: %s", message.toStdString().c_str());
+        system_message_label_->setStyleSheet("color: black; font-weight: normal;");
     }
 }
 
 void Panel_StatusBar::onSetSpeedRatioRDT(double ratio) {
     int percent = static_cast<int>(std::round(ratio * 100.0));
-    percent = std::max(0, std::min(100, percent)); // Clamp to 0-100
     speed_label_->setText(QString("Speed: %1%").arg(percent));
-    LOG_DEBUG_F(MODULE_NAME, "Speed display updated to: %d%%", percent);
 }
 
 void Panel_StatusBar::onSetEstopStatusRDT(bool isActive) {
     estop_is_active_ = isActive;
+    QPalette pal = palette();
     if (isActive) {
-        onSetRobotModeRDT(RobotMode::EStop); // Ensure mode label also reflects EStop
-        onSetSystemMessageRDT("EMERGENCY STOPPED", true); // Override message
-        // Visual cue for E-Stop, e.g., panel background
-        QPalette pal = palette();
         pal.setColor(QPalette::Window, QColorConstants::Svg::orangered);
-        setPalette(pal);
+        onSetSystemMessageRDT("EMERGENCY STOP ACTIVE", true);
     } else {
-        // E-Stop cleared, revert visual cues. RobotMode and Message will be updated by regular polling.
-        QPalette pal = palette();
         pal.setColor(QPalette::Window, QColor(Qt::lightGray).lighter(110));
-        setPalette(pal);
-        // If the mode was EStop, it should be updated by a subsequent onSetRobotModeRDT call to Idle/Error etc.
-        // If the message was "EMERGENCY STOPPED", it will be cleared by a subsequent onSetSystemMessageRDT.
+        // We don't clear the system message here, as another error might be present.
+        // The next call to onSetSystemMessageRDT will handle it.
     }
-    LOG_INFO_F(MODULE_NAME, "E-Stop status updated to: %s", isActive ? "ACTIVE" : "INACTIVE");
+    setPalette(pal);
 }
 
 void Panel_StatusBar::onSetConnectionStatusRDT(bool isConnected) {
-    connection_label_->setText(isConnected ? "Physically: Connected" : "Physically: Disconnected");
+    connection_label_->setText(isConnected ? "HW: Connected" : "HW: Disconnected");
     connection_label_->setStyleSheet(isConnected ? "color: darkgreen; font-weight: bold;" : "color: dimgray;");
-    LOG_INFO_F(MODULE_NAME, "Physical connection status display updated to: %s", isConnected ? "Connected" : "Disconnected");
 }
-
-void Panel_StatusBar::onSetSimRealModeSelector(bool isReal) {
-    sim_real_mode_selector_->blockSignals(true); // Prevent emitting modeChangedByUser
-    sim_real_mode_selector_->setCurrentIndex(isReal ? 1 : 0);
-    sim_real_mode_selector_->blockSignals(false);
-    LOG_INFO_F(MODULE_NAME, "SIM/REAL mode selector set to: %s", isReal ? "REAL" : "SIM");
-}
-
 
 } // namespace RDT

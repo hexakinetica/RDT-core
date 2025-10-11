@@ -9,11 +9,11 @@
 
 This repository contains the full source code for the Robot Development Toolkit (RDT), the project at the heart of the book "[The RDT Book: Building a Real-World Robot Control System](https://github.com/hexakinetica/rdt-book)".
 
-![Screenshot](https://raw.githubusercontent.com/hexakinetica/rdt-core/main/HMI_screen.jpg)
+![Screenshot](HMI_screen.jpg)
 
 🎥 *Watch on YouTube*: [Demo Video](https://youtu.be/JDtNz1AyA9I)
 
-## ⚠️ Project Status: Public Beta Version
+## ⚠️ Project Status:: Public Beta Version
 
 **This is a beta-level demonstration project.** The primary goal of this codebase is to serve as a **learning tool** and a **living architectural blueprint**. It is designed to be read, understood, and experimented with.
 
@@ -25,7 +25,7 @@ This repository contains the full source code for the Robot Development Toolkit 
 
 Think of it as a car with a beautifully designed engine and chassis, but the radio might crackle and the glove box doesn't quite close. The fundamentals are solid, and we invite you to help us finish the interior.
 
-## 🧭 Philosophy: A Field Manual for Robot Control
+## 🧭 Filosofía:: A Field Manual for Robot Control
 
 This is not just another academic simulator. RDT is a "field manual" in C++ form, designed to bridge the huge gap between university-level robotics (like basic ROS scripts) and the robust, deterministic, and maintainable systems required on a factory floor.
 

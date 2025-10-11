@@ -121,6 +121,35 @@ struct BaseFrame { /* ... same, uses CartPose ... */
 };
 
 //--------------------------------------------------------------------------
+// SECTION: NEW: Detailed fault reporting structures 
+//--------------------------------------------------------------------------
+/**
+ * @enum FaultType
+ * @brief Categorizes the type of limit violation detected.
+ */
+enum class FaultType : uint8_t {
+    None,           ///< No fault.
+    VelocityLimit,  ///< A velocity limit was exceeded. This is typically a WARNING, handled internally by subdividing the move.
+    PositionLimit   ///< A position limit was exceeded. This is a critical ERROR that stops motion.
+};
+
+/**
+ * @struct FaultData
+ * @brief Contains detailed information about a fault condition.
+ */
+struct FaultData {
+    FaultType type = FaultType::None; ///< The type of fault.
+    AxisId axis = AxisId::A1;         ///< The axis on which the fault occurred.
+    
+    // Values are in human-readable, type-safe units for logging and display.
+    Degrees actual_position_deg{0.0};    ///< The actual/commanded position that caused the fault.
+    Degrees limit_position_deg{0.0};     ///< The position limit that was exceeded.
+    DegreesPerSecond actual_velocity_deg_s{0.0}; ///< The actual (calculated) velocity that caused the fault.
+    DegreesPerSecond limit_velocity_deg_s{0.0};  ///< The velocity limit that was exceeded.
+};
+
+
+//--------------------------------------------------------------------------
 // SECTION: Trajectory Related Types
 //--------------------------------------------------------------------------
 enum class WaypointDataType : uint8_t { /* ... same ... */ NOTYPE, CARTESIAN_DOMINANT_CMD, JOINT_DOMINANT_CMD, JOINT_DOMINANT_FB, FULL_FB };
@@ -132,27 +161,56 @@ struct RobotCommandFrame {
     double speed_ratio = 1.0; double acceleration_ratio = 1.0; // Unitless ratios
     RobotCommandFrame() = default;
 };
+
+// *** MODIFIED: RobotFeedbackFrame includes FaultData ***
 struct RobotFeedbackFrame {
-    CartPose cartesian_actual{}; AxisSet joint_actual{};
-    double current_speed_ratio = 0.0; RTState rt_state = RTState::Idle;
-    bool target_reached = false; std::chrono::steady_clock::time_point arrival_time{};
+    CartPose cartesian_actual{}; 
+    AxisSet joint_actual{};
+    double current_speed_ratio = 0.0; 
+    RTState rt_state = RTState::Idle;
+    bool target_reached = false; 
+    std::chrono::steady_clock::time_point arrival_time{};
     Meters path_deviation = 0.0_m;
+    
+    FaultData fault; ///< Detailed information about any fault detected in this cycle.
+
     RobotFeedbackFrame() = default;
 };
+
 struct TrajectoryPointHeader {
     WaypointDataType data_type = WaypointDataType::NOTYPE; MotionType motion_type = MotionType::JOINT;
     bool use_blending = false; 
     Seconds segment_duration{0};
     ToolFrame tool{}; BaseFrame base{};
-    uint64_t trajectory_id = 0; uint32_t sequence_index = 0;
-    bool is_target_reached_for_this_point = false; bool has_error_at_this_point = false;
+    uint64_t trajectory_id = 0;
+    uint32_t sequence_index = 0;
+    bool is_target_reached_for_this_point = false;
+    bool has_error_at_this_point = false;
     std::string user_comment;
     TrajectoryPointHeader() = default;
 };
 struct TrajectoryPoint {
-    TrajectoryPointHeader header{}; RobotCommandFrame command{}; RobotFeedbackFrame feedback{};
+    TrajectoryPointHeader header{};
+    RobotCommandFrame command{};
+    RobotFeedbackFrame feedback{};
     TrajectoryPoint() = default;
 };
+
+//--------------------------------------------------------------------------
+// SECTION: Trajectory Related Types
+//--------------------------------------------------------------------------
+struct RobotLimits {
+    /**
+     * @brief Joint position limits [min, max] for each axis.
+     */
+    std::array<std::pair<Degrees, Degrees>, ROBOT_AXES_COUNT> joint_position_limits_deg;
+
+    /**
+     * @brief Maximum joint velocity for each axis.
+     */
+    std::array<DegreesPerSecond, ROBOT_AXES_COUNT> joint_velocity_limits_deg_s;
+};
+
 
 } // namespace RDT
 #endif // DATATYPES_H

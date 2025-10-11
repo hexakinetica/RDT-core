@@ -6,12 +6,17 @@
 
 #include "DataTypes.h"
 #include "Units.h"
-#include "TrajectoryPlanner.h"
-#include "MotionManager.h"
-#include "KinematicSolver.h"
-#include "StateData.h"
-#include "FrameTransformer.h"
 #include "Logger.h"
+#include "StateData.h"
+#include "MasterHardwareInterface.h"
+#include "MotionManager.h"
+#include "TrajectoryPlanner.h"
+#include "TrajectoryInterpolator.h"
+#include "KinematicSolver.h"
+#include "KinematicModel.h"
+#include "KdlKinematicSolver.h"
+#include "RobotConfig.h" // *** NEW DEPENDENCY ***
+
 
 #include <memory>
 #include <string>
@@ -19,19 +24,17 @@
 #include <atomic>
 #include <mutex>
 #include <chrono>
+#include <vector>
 
 namespace RDT {
 
-// ControllerState      ,
-//   StateData->RobotMode  .
-//       ,  -  .
-enum class ControllerState { Idle, Initializing, Running, Moving, Paused, Error, Stopping };
+enum class ControllerState { Idle, Initializing, Running, Error };
 
 class RobotController {
 public:
-    RobotController(std::shared_ptr<TrajectoryPlanner> planner,
-                    std::shared_ptr<MotionManager> motion_manager,
-                    std::shared_ptr<KinematicSolver> solver,
+    RobotController(const InterfaceConfig& hw_config,
+                    const ControllerConfig& ctrl_config, // *** NEW ***
+                    const KinematicModel& model,
                     std::shared_ptr<StateData> state_data);
     ~RobotController();
 
@@ -46,41 +49,43 @@ public:
     void emergencyStop();
     void reset();
 
-    //    .       StateData.
+    enum class SwitchRequestResult { Success, Error, NotInSync, AlreadyInMode };
+    [[nodiscard]] SwitchRequestResult requestModeSwitch(MasterHardwareInterface::ActiveMode mode);
+    void forceSync();
+
     [[nodiscard]] ControllerState getInternalControllerState() const;
     [[nodiscard]] bool isMotionTaskActive() const;
 
+    // ============================================================================
+    // *** НОВЫЕ МЕТОДЫ-ПРОКСИ для Adapter ***
+    // ============================================================================
+    [[nodiscard]] MasterHardwareInterface::ActiveMode getActiveMode() const;
+    [[nodiscard]] bool isRealInterfaceConnected() const;
+
 private:
-    void controlLoop(std::stop_token stoken); //  stop_token  jthread
+    void controlLoop(std::stop_token stoken);
     void processMotionTask();
-    void processFeedbackBatch(); //      
+    void processFeedbackBatch();
+
+    void processFault(const FaultData& fault);
 
     void logControllerMessage(const std::string& message, LogLevel level = LogLevel::Info);
-    void startControlLoop(); // Helper   
-    void stopControlLoop();  // Helper   
+    void startControlLoop();
+    void stopControlLoop();
 
+    std::shared_ptr<StateData> state_data_;
+    std::shared_ptr<KinematicSolver> solver_;
     std::shared_ptr<TrajectoryPlanner> planner_;
     std::shared_ptr<MotionManager> motion_manager_;
-    std::shared_ptr<KinematicSolver> solver_;
-    std::shared_ptr<StateData> state_data_;
+    std::shared_ptr<MasterHardwareInterface> hw_interface_;
 
     std::jthread control_thread_;
-    //    . StateData -   .
-    // std::atomic<ControllerState> internal_controller_state_ {ControllerState::Idle};
-    // std::atomic<bool> current_motion_task_active_ {false};
-    // std::atomic<bool> estop_active_ {false};
-
-    ToolFrame active_user_tool_context_;
-    BaseFrame active_user_base_context_;
+    std::atomic<bool> motion_task_active_{false};
     TrajectoryPoint current_user_command_context_;
-    
-    //    
     std::chrono::steady_clock::time_point last_feedback_processing_time_;
 
-    static constexpr std::chrono::milliseconds CONTROL_LOOP_PERIOD{std::chrono::milliseconds(50)}; //      
-    static constexpr std::chrono::milliseconds FEEDBACK_PROCESSING_INTERVAL{std::chrono::milliseconds(200)}; //   
-    static constexpr Seconds PLANNER_DT_SAMPLE = 0.1_s;
-    static constexpr Seconds PLANNER_WINDOW_DURATION = 1.0_s;
+    // *** MODIFIED: Parameters from config instead of static consts ***
+    const ControllerConfig config_;
 
     static inline const std::string MODULE_NAME = "RobotCtrl";
 };

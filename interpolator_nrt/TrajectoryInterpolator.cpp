@@ -1,7 +1,7 @@
 // TrajectoryInterpolator.cpp
 #include "TrajectoryInterpolator.h"
 #include <cmath> // For std::abs, std::sqrt
-#include <format> // For std::format
+#include <sstream> // For stringstream formatting
 
 namespace RDT {
 
@@ -139,7 +139,12 @@ TrajectoryPoint TrajectoryInterpolator::generateTrajectoryPointForTime(Seconds t
     if (actual_profile_motion_type == MotionType::JOINT) {
         tp_out.command.joint_target = current_profile_->interpolateJoints(t);
         tp_out.header.data_type = WaypointDataType::JOINT_DOMINANT_CMD;
-        LOG_DEBUG_F(MODULE_NAME,std::format("Interpolating point at t = {}; point={}", time_in_current_profile_.toString(), tp_out.command.joint_target.toJointPoseString()).c_str() );
+        {
+            std::stringstream ss;
+            ss << "Interpolating point at t = " << time_in_current_profile_.toString()
+               << "; point=" << tp_out.command.joint_target.toJointPoseString();
+            LOG_DEBUG_F(MODULE_NAME, ss.str().c_str());
+        }
     } else if (actual_profile_motion_type == MotionType::LIN) {
         tp_out.command.cartesian_target = current_profile_->interpolateCartesian(t);
         tp_out.header.data_type = WaypointDataType::CARTESIAN_DOMINANT_CMD;

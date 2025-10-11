@@ -181,7 +181,7 @@ public:
     void delete_selections();
 
     // Load robot model
-    bool loadmodel();
+    bool loadmodel_r900();
 
 private:
     void m_initialize_context();

@@ -990,26 +990,26 @@ void Panel_RobotView3D::draw_line_store_into_bucketvec(bucket b){
     }
 }
 
-bool Panel_RobotView3D::loadmodel()
+bool Panel_RobotView3D::loadmodel_r900()
 {
     SegmentVec.clear(); // Clear previous segments
-
-    bool ok=Readstepfile("/home/ui/Desktop/Robot_UI/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_base.step");
+    qDebug()<<"RobotView3D : Robot model load started.";
+    bool ok=Readstepfile("/home/rdt/Desktop/RDT/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_base.step");
     if(!ok){ qWarning() << "Failed to load kuka_base.step"; return false;}
-    ok=Readstepfile("/home/ui/Desktop/Robot_UI/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_1.step");
+    ok=Readstepfile("/home/rdt/Desktop/RDT/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_1.step");
     if(!ok){ qWarning() << "Failed to load Link1.STEP"; return false;}
-    ok=Readstepfile("/home/ui/Desktop/Robot_UI/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_2.step");
+    ok=Readstepfile("/home/rdt/Desktop/RDT/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_2.step");
     if(!ok){ qWarning() << "Failed to load Link2.STEP"; return false;}
-    ok=Readstepfile("/home/ui/Desktop/Robot_UI/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_3.step");
+    ok=Readstepfile("/home/rdt/Desktop/RDT/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_3.step");
     if(!ok){ qWarning() << "Failed to load Link3.STEP"; return false;}
-    ok=Readstepfile("/home/ui/Desktop/Robot_UI/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_4.step");
+    ok=Readstepfile("/home/rdt/Desktop/RDT/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_4.step");
     if(!ok){ qWarning() << "Failed to load Link4.STEP"; return false;}
-    ok=Readstepfile("/home/ui/Desktop/Robot_UI/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_5.step");
+    ok=Readstepfile("/home/rdt/Desktop/RDT/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_5.step");
     if(!ok){ qWarning() << "Failed to load Link5.STEP"; return false;}
-   // ok=Readstepfile("/home/ui/Desktop/Robot_UI/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_6.step");
+   // ok=Readstepfile("/home/rdt/Desktop/RDT/RobotControl_MVP/1_RobotControl_main/kuka_r900/kuka_joint_6.step");
    // if(!ok){ qWarning() << "Failed to load Link6.STEP"; return false;}
 
-    qDebug()<<"Robot model loaded successfully.";
+    qDebug()<<"RobotView3D : Robot model loaded successfully.";
 
     setup_tcp_origin();
     //Redraw();
@@ -1019,7 +1019,7 @@ bool Panel_RobotView3D::loadmodel()
 void Panel_RobotView3D::mainloop()
 {
     if(!ready){
-        bool ok=loadmodel();
+        bool ok=loadmodel_r900();
         if(ok){
             ready=1;
             // Initial pose if needed

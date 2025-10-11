@@ -7,32 +7,30 @@
 #include <QString>
 #include <QTimer>
 #include <QVector>
+#include <QMessageBox>
 #include <memory>
 
-//  RDT 
 #include "StateData.h"
-#include "RobotController.h" // RDT::RobotController  RDT::ControllerState
-#include "DataTypes.h"     // RDT::TrajectoryPoint, ToolFrame, BaseFrame, etc.
-#include "Units.h"         // RDT::literals
-#include "Logger.h"
-#include "KinematicSolver.h" // RDT::KinematicSolver
-
-//        GUI
-// ,        RDT
+#include "RobotController.h" 
 #include "Panel_StateDisplay.h"
 #include "Panel_RobotView3D.h"
 #include "Panel_StatusBar.h"
 #include "Panel_Teach.h"
 #include "Panel_JogControl.h"
+#include "DataTypes.h"
+#include "Logger.h"
+
 
 
 namespace RDT {
 
 /**
- * @file Adapter_RobotController.h
- * @brief Defines the RDT::Adapter_RobotController Qt class, bridging the C++ backend with the Qt GUI.
+ * @class Adapter_RobotController
+ * @brief The bridge between the non-Qt backend (RobotController) and the Qt GUI.
+ *
+ * This QObject-derived class translates GUI signals into backend method calls
+ * and polls the backend's state to emit Qt signals for updating the GUI.
  */
-
 class Adapter_RobotController : public QObject {
     Q_OBJECT
 
@@ -46,81 +44,74 @@ public:
 
     Adapter_RobotController(const Adapter_RobotController&) = delete;
     Adapter_RobotController& operator=(const Adapter_RobotController&) = delete;
-    Adapter_RobotController(Adapter_RobotController&&) = delete;
-    Adapter_RobotController& operator=(Adapter_RobotController&&) = delete;
 
+    // --- Connection Methods for Panels ---
     void connectStateDisplayPanel(RDT::Panel_StateDisplay* panel);
     void connectRobotView3D(Panel_RobotView3D* panel);
     void connectStatusBarPanel(RDT::Panel_StatusBar* panel);
     void connectTeachPanel(RDT::Panel_Teach* panel);
     void connectJogPanel(RDT::Panel_JogControl* panel);
 
-    Q_INVOKABLE bool initializeBackendAndStartGUIUpdates(const RDT::TrajectoryPoint& initial_robot_state_user, int gui_update_interval_ms = 100);
+    /** @brief Initializes the backend controller and starts the GUI update timer. */
+    Q_INVOKABLE bool initializeBackend(const RDT::TrajectoryPoint& initial_robot_state_user);
+    
     void stopGuiUpdateTimer();
     void startGuiUpdateTimer(int interval_ms = 100);
 
 signals:
+    // --- Signals for GUI Panels ---
     void currentPoseUpdated(const RDT::CartPose& tcp_in_active_base, const RDT::AxisSet& joints);
     void currentJointsChanged(const RDT::AxisSet& joints);
-    void activeToolFrameChanged(const RDT::ToolFrame& toolFrame);
-    void activeBaseFrameChanged(const RDT::BaseFrame& baseFrame);
     void robotModeChanged(RDT::RobotMode mode);
-    void controllerInternalStateChanged(RDT::ControllerState controller_state);
     void systemMessageChanged(const QString& message, bool isError);
     void globalSpeedRatioChanged(double ratio_0_to_1);
     void estopStatusChanged(bool isActive);
     void physicalConnectionStatusChanged(bool isConnected);
-    void motionTaskActiveStatusChanged(bool isActive);
-    void programExecutionStepChanged(int current_step_index);
     void programModelChanged(const QVector<RDT::TrajectoryPoint>& program);
+    void activeModeChanged(const QString& modeName, bool isRealConnected);
+    void programExecutionStepChanged(int current_step_index);
+    void motionTaskActiveStatusChanged(bool isActive);
+    void controllerInternalStateChanged(RDT::ControllerState state);
 
 public slots:
-    // TeachPanel Slots
+    // --- Slots for Commands from GUI ---
+    // Teach Panel
     void onTeachPanelTeachCurrentPose(RDT::MotionType type, const QString& toolName, const QString& baseName, double speedRatio);
     void onTeachPanelDeletePoint(int index);
     void onTeachPanelTouchUpPoint(int index, RDT::MotionType type, const QString& newToolName, const QString& newBaseName, double speedRatio);
     void onTeachPanelRunProgram();
-    void onTeachPanelPauseResumeProgram();
     void onTeachPanelStopProgram();
-    void onTeachPanelProgramSpeedChanged(int percent_1_to_100);
+    void onTeachPanelProgramSpeedChanged(int percent);
     void onTeachPanelActiveToolSelected(const QString& toolName);
     void onTeachPanelActiveBaseSelected(const QString& baseName);
 
-    // JogControlPanel Slots
-    void onJogPanelIncrementJoint(int axis_idx_0_based, double delta_deg_val, double speed_ratio_0_1);
-    void onJogPanelIncrementCartesian(int axis_idx_0_based, double delta_val_mm_or_rad, const QString& frame_name_str, double speed_ratio_0_1);
-    void onJogPanelContinuousJointStart(int axis_idx_0_based, bool positive_direction, double speed_ratio_0_1);
-    void onJogPanelContinuousCartesianStart(int axis_idx_0_based, bool positive_direction, const QString& frame_name_str, double speed_ratio_0_1);
-    void onJogPanelContinuousJointStop(int axis_idx_0_based);
-    void onJogPanelContinuousCartesianStop(int axis_idx_0_based, const QString& frame_name_str);
+    // Jog Panel
+    void onJogPanelIncrementJoint(int axis_idx, double delta_deg, double speed_ratio);
+    void onJogPanelIncrementCartesian(int axis_idx, double delta_val, const QString& frame_qstr, double speed_ratio);
     void onJogPanelGoHome();
     void onJogPanelEmergencyStop();
-    void onJogPanelSpeedChanged(int percent_1_to_100);
+    void onJogPanelSpeedChanged(int percent);
 
-    // StatusBarPanel Slot
-    void onSimRealModeChanged(bool isRealModeSelected);
-
-    // Slot for clearing errors from GUI
-    void onClearRobotErrorRequested();
-
+    // Status Bar
+    void onSwitchToSimRequested();
+    void onSwitchToRealRequested();
+    void onResetErrorRequested();
 
 private slots:
+    /** @brief The main polling function, called by a QTimer. */
     void pollStateDataAndUpdateGUI();
 
 private:
+    // Helper methods
     [[nodiscard]] RDT::ToolFrame getToolFrameFromGUIName(const QString& name) const;
     [[nodiscard]] RDT::BaseFrame getBaseFrameFromGUIName(const QString& name) const;
+    void apply_cartesian_increment(CartPose& pose, int axis_idx, double increment);
 
     std::shared_ptr<RDT::RobotController> rc_impl_;
     std::shared_ptr<RDT::StateData> state_data_;
     QTimer* update_timer_;
 
-    RDT::Panel_StateDisplay* ui_state_panel_ptr_ = nullptr;
-    Panel_RobotView3D*  ui_view_3d_ptr_     = nullptr;
-    RDT::Panel_StatusBar*    ui_status_bar_ptr_  = nullptr;
-    RDT::Panel_Teach*        ui_teach_panel_ptr_ = nullptr;
-    RDT::Panel_JogControl*   ui_jog_panel_ptr_   = nullptr;
-
+    // --- Cached values to detect changes ---
     RDT::TrajectoryPoint last_polled_fb_tp_;
     RDT::RobotMode last_polled_robot_mode_ = RDT::RobotMode::Initializing;
     RDT::ControllerState last_polled_controller_state_ = RDT::ControllerState::Initializing;
@@ -128,15 +119,14 @@ private:
     bool last_polled_has_error_ = true;
     double last_polled_speed_ratio_ = -1.0;
     bool last_polled_estop_state_ = true;
-    bool last_polled_phys_connection_ = true;
+    bool last_polled_real_connected_ = false;
     bool last_polled_motion_task_active_ = true;
-    RDT::ToolFrame last_polled_tool_frame_;
-    RDT::BaseFrame last_polled_base_frame_;
+    QString last_polled_active_mode_;
 
-    QVector<RDT::TrajectoryPoint> current_program_model_data_; //    
+    QVector<RDT::TrajectoryPoint> current_program_model_data_;
 
     static inline const std::string ADAPTER_MODULE_NAME = "RC_Adapter";
 };
 
 } // namespace RDT
-#endif // ADAPTER_ROBOTCONTROLLER_H
+#endif

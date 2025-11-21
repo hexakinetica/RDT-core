@@ -1,0 +1,5 @@
+
+chmod +x *.sh
+./bootstrap_all.sh
+
+

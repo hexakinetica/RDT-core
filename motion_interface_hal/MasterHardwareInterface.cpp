@@ -183,33 +183,68 @@ void MasterHardwareInterface::debugStreamThreadLoop(std::stop_token stoken) {
         return;
     }
 
-    LOG_INFO_F(MODULE_NAME, "Debug UDP stream started. Target: %s:%d",
-        config_.debug_stream_config.destination_ip.c_str(),
-        config_.debug_stream_config.destination_port);
+    // --- ИСПРАВЛЕНИЕ 1: Проверка на ноль и использование float-деления ---
+    if (config_.debug_stream_config.stream_frequency_hz <= 0) {
+        LOG_ERROR(MODULE_NAME, "Debug stream frequency must be positive. Stream stopped.");
+        return;
+    }
+    
+    // Используем 1000.0 для деления с плавающей точкой, чтобы получить точный период
+    auto period = std::chrono::duration<double>(1.0 / static_cast<double>(config_.debug_stream_config.stream_frequency_hz));
 
-    auto period = std::chrono::milliseconds(1000 / config_.debug_stream_config.stream_frequency_hz);
+    
+    auto next_cycle_time = std::chrono::steady_clock::now();
+    auto start_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+
+    LOG_INFO_F(MODULE_NAME, "Debug UDP stream started. Target: %s:%d, Frequency: %d Hz",
+        config_.debug_stream_config.destination_ip.c_str(),
+        config_.debug_stream_config.destination_port,
+        config_.debug_stream_config.stream_frequency_hz);
 
     while (!stoken.stop_requested()) {
+        // --- ИСПРАВЛЕНИЕ 2: Использование 'sleep_until' для стабильной частоты ---
+        auto period_ns = std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
+        next_cycle_time += period_ns;
+
+        // Получаем таймштамп в самом начале цикла
+        auto now = std::chrono::system_clock::now();
+        auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+        // Получаем все три состояния 
+        AxisSet actual_fb = getLatestFeedback();
         AxisSet sim_fb = sim_interface_ ? sim_interface_->getLatestFeedback() : AxisSet{};
         AxisSet real_fb = (real_interface_ && real_interface_->isConnected()) ? real_interface_->getLatestFeedback() : AxisSet{};
         
         std::ostringstream ss;
-        ss << "SIM," << std::fixed << std::setprecision(4);
+        ss << std::fixed << std::setprecision(3);
+
+        // 1. Формируем строку для ACTUAL с таймштампом
+        ss << "[ TIME: " << (timestamp_ms-start_time_ms)/1000.0 << "; ";
+        ss << "ACTUAL: ";
         for (size_t i = 0; i < ROBOT_AXES_COUNT; ++i) {
-            ss << "A" << (i + 1) << ":" << sim_fb.at(i).angle.toDegrees().value() << (i == 5 ? "" : ",");
-        }
-        ss << "\nREAL,";
-        for (size_t i = 0; i < ROBOT_AXES_COUNT; ++i) {
-            ss << "A" << (i + 1) << ":" << real_fb.at(i).angle.toDegrees().value() << (i == 5 ? "" : ",");
+            ss << "A" << (i + 1) << ":" << actual_fb.at(i).angle.toDegrees().value() << (i == ROBOT_AXES_COUNT - 1 ? "" : ",");
         }
         
+        // 2. Формируем строку для REAL
+        ss << "; REAL: ";
+        for (size_t i = 0; i < ROBOT_AXES_COUNT; ++i) {
+            ss << "A" << (i + 1) << ":" << real_fb.at(i).angle.toDegrees().value() << (i == ROBOT_AXES_COUNT - 1 ? "" : ",");
+        }
+
+        // 3. Формируем строку для SIM
+        ss << "; SIM: ";
+        for (size_t i = 0; i < ROBOT_AXES_COUNT; ++i) {
+            ss << "A" << (i + 1) << ":" << sim_fb.at(i).angle.toDegrees().value() << (i == ROBOT_AXES_COUNT - 1 ? "" : ",");
+        }
+         ss << " ]\n";
         std::string payload = ss.str();
         std::vector<char> data(payload.begin(), payload.end());
         if (debug_udp_peer_->send(data) < 0) {
             LOG_DEBUG(MODULE_NAME, "Failed to send debug UDP packet.");
         }
 
-        std::this_thread::sleep_for(period);
+        // Ожидаем до начала следующего цикла
+        std::this_thread::sleep_until(next_cycle_time);
     }
     LOG_INFO(MODULE_NAME, "Debug UDP stream stopped.");
 }

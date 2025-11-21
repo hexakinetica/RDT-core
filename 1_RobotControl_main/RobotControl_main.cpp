@@ -66,6 +66,7 @@ int main(int argc, char* argv[]) {
     // ============================================================================
     InterfaceConfig hw_config;
     hw_config.realtime_type = InterfaceConfig::RealtimeInterfaceType::Udp;
+    hw_config.debug_stream_config.stream_frequency_hz = 200;
     hw_config.simulation_initial_joints.fromAngleArray({0.0_rad, (-30.0_deg).toRadians(), (30.0_deg).toRadians(), 0.0_rad, 0.0_rad, 0.0_rad});
 
     ControllerConfig ctrl_config;

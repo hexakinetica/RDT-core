@@ -75,7 +75,7 @@ add_executable(RobotControlApp
     # Интерфейсы (самое важное добавление)
     ../motion_interface_hal/MasterHardwareInterface.cpp
     ../motion_interface_hal/InternalSimulation.cpp
-    ../motion_interface_hal/EthercatInterface.cpp
+    ../motion_interface_hal/ethercat/EthercatInterface.cpp
     ../motion_interface_hal/UdpInterface.cpp
     # Планировщик
     ../trajectory_planner_nrt/TrajectoryPlanner.cpp

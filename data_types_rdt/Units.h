@@ -4,13 +4,13 @@
 
 #pragma once
 
-#include <cmath>     // For std::abs, std::fmod, std::sqrt
-#include <ostream>   // For ostream operator<<
-#include <stdexcept> // For std::runtime_error
-#include <limits>    // For std::numeric_limits for epsilon comparisons
-#include <string>    // For toString methods
-#include <sstream>   // For std::ostringstream
-#include <iomanip>   // For std::fixed, std::setprecision
+#include <cmath>
+#include <ostream>
+#include <stdexcept>
+#include <limits>
+#include <string>
+#include <sstream>
+#include <iomanip>
 
 namespace RDT {
 
@@ -28,7 +28,7 @@ class DegreesPerSecond; class RadiansPerSecond;
 class MillimetersPerSecond; class MetersPerSecond;
 class DegreesPerSecondSq; class RadiansPerSecondSq;
 class MillimetersPerSecondSq; class MetersPerSecondSq;
-class Seconds; /* class Milliseconds; // Not fully implemented yet, but Seconds is primary */
+class Seconds;
 
 // --- Helper for toString ---
 template<typename T>
@@ -51,7 +51,8 @@ public:
     Radians& operator-=(Radians other) { value_ -= other.value_; return *this; }
     Radians& operator*=(double scalar) { value_ *= scalar; return *this; }
     Radians& operator/=(double scalar) {
-        if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in Radians::operator/=");
+        // В детерминированных системах исключения не используются.
+        // Деление на ноль приведет к +/- INF согласно IEEE 754.
         value_ /= scalar; return *this;
     }
     [[nodiscard]] constexpr Radians operator-() const { return Radians(-value_); } // Unary minus
@@ -80,7 +81,6 @@ private:
 [[nodiscard]] constexpr inline Radians operator*(Radians lhs, double scalar) { return Radians(lhs.value() * scalar); }
 [[nodiscard]] constexpr inline Radians operator*(double scalar, Radians rhs) { return Radians(scalar * rhs.value()); }
 [[nodiscard]] inline Radians operator/(Radians lhs, double scalar) {
-    if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in operator/(Radians, double)");
     return Radians(lhs.value() / scalar);
 }
 inline std::ostream& operator<<(std::ostream& os, Radians rad) { return os << rad.toString(); }
@@ -93,7 +93,6 @@ public:
     Degrees& operator-=(Degrees other) { value_ -= other.value_; return *this; }
     Degrees& operator*=(double scalar) { value_ *= scalar; return *this; }
     Degrees& operator/=(double scalar) {
-        if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in Degrees::operator/=");
         value_ /= scalar; return *this;
     }
     [[nodiscard]] constexpr Degrees operator-() const { return Degrees(-value_); }
@@ -121,7 +120,6 @@ private:
 [[nodiscard]] constexpr inline Degrees operator*(Degrees lhs, double scalar) { return Degrees(lhs.value() * scalar); }
 [[nodiscard]] constexpr inline Degrees operator*(double scalar, Degrees rhs) { return Degrees(scalar * rhs.value()); }
 [[nodiscard]] inline Degrees operator/(Degrees lhs, double scalar) {
-    if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in operator/(Degrees, double)");
     return Degrees(lhs.value() / scalar);
 }
 inline std::ostream& operator<<(std::ostream& os, Degrees deg) { return os << deg.toString(); }
@@ -133,14 +131,14 @@ inline Radians Degrees::toRadians() const { return Radians(value_ * (UnitConstan
 //======================================================================================
 // Linear Distance Units
 //======================================================================================
-class Meters { /* ... (    Radians,  .abs(), toString, ) ... */
+class Meters {
 public:
     constexpr explicit Meters(double val = 0.0) : value_(val) {}
     [[nodiscard]] constexpr double value() const { return value_; }
     Meters& operator+=(Meters other) { value_ += other.value_; return *this; }
     Meters& operator-=(Meters other) { value_ -= other.value_; return *this; }
     Meters& operator*=(double scalar) { value_ *= scalar; return *this; }
-    Meters& operator/=(double scalar) { if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in Meters"); value_ /= scalar; return *this;}
+    Meters& operator/=(double scalar) { value_ /= scalar; return *this;}
     [[nodiscard]] constexpr Meters operator-() const { return Meters(-value_); }
     [[nodiscard]] constexpr Meters abs() const { return Meters(std::abs(value_)); }
     [[nodiscard]] constexpr bool operator==(Meters other) const { return std::abs(value_ - other.value_) < UnitConstants::DEFAULT_EPSILON; }
@@ -157,17 +155,17 @@ private: double value_;
 [[nodiscard]] constexpr inline Meters operator-(Meters lhs, Meters rhs) { return Meters(lhs.value() - rhs.value()); }
 [[nodiscard]] constexpr inline Meters operator*(Meters lhs, double scalar) { return Meters(lhs.value() * scalar); }
 [[nodiscard]] constexpr inline Meters operator*(double scalar, Meters rhs) { return Meters(scalar * rhs.value()); }
-[[nodiscard]] inline Meters operator/(Meters lhs, double scalar) { if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in operator/(Meters, double)"); return Meters(lhs.value() / scalar); }
+[[nodiscard]] inline Meters operator/(Meters lhs, double scalar) { return Meters(lhs.value() / scalar); }
 inline std::ostream& operator<<(std::ostream& os, Meters m) { return os << m.toString(); }
 
-class Millimeters { /* ... (    Degrees,  .abs(), toString, ) ... */
+class Millimeters {
 public:
     constexpr explicit Millimeters(double val = 0.0) : value_(val) {}
     [[nodiscard]] constexpr double value() const { return value_; }
     Millimeters& operator+=(Millimeters other) { value_ += other.value_; return *this; }
     Millimeters& operator-=(Millimeters other) { value_ -= other.value_; return *this; }
     Millimeters& operator*=(double scalar) { value_ *= scalar; return *this; }
-    Millimeters& operator/=(double scalar) { if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in Millimeters"); value_ /= scalar; return *this;}
+    Millimeters& operator/=(double scalar) { value_ /= scalar; return *this;}
     [[nodiscard]] constexpr Millimeters operator-() const { return Millimeters(-value_); }
     [[nodiscard]] constexpr Millimeters abs() const { return Millimeters(std::abs(value_)); }
     [[nodiscard]] constexpr bool operator==(Millimeters other) const { return std::abs(value_ - other.value_) < UnitConstants::DEFAULT_EPSILON; }
@@ -176,7 +174,7 @@ public:
     [[nodiscard]] std::string toString(int precision = 1) const { return value_to_string_with_suffix(value_, precision, " mm"); }
 private: double value_;
 };
-[[nodiscard]] constexpr inline Millimeters operator+(Millimeters lhs, Millimeters rhs) { return Millimeters(lhs.value()+rhs.value());} // Example
+[[nodiscard]] constexpr inline Millimeters operator+(Millimeters lhs, Millimeters rhs) { return Millimeters(lhs.value()+rhs.value());}
 inline std::ostream& operator<<(std::ostream& os, Millimeters mm) { return os << mm.toString(); }
 inline Millimeters Meters::toMillimeters() const { return Millimeters(value_ * 1000.0); }
 
@@ -184,14 +182,14 @@ inline Millimeters Meters::toMillimeters() const { return Millimeters(value_ * 1
 //======================================================================================
 // Time Units
 //======================================================================================
-class Seconds { /* ... (    Radians,  .abs(), toString, ) ... */
+class Seconds {
 public:
     constexpr explicit Seconds(double val = 0.0) : value_(val) {}
     [[nodiscard]] constexpr double value() const { return value_; }
     Seconds& operator+=(Seconds other) { value_ += other.value_; return *this; }
     Seconds& operator-=(Seconds other) { value_ -= other.value_; return *this; }
     Seconds& operator*=(double scalar) { value_ *= scalar; return *this; }
-    Seconds& operator/=(double scalar) { if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in Seconds"); value_ /= scalar; return *this;}
+    Seconds& operator/=(double scalar) { value_ /= scalar; return *this;}
     [[nodiscard]] constexpr Seconds operator-() const { return Seconds(-value_); }
     [[nodiscard]] constexpr Seconds abs() const { return Seconds(std::abs(value_)); }
     [[nodiscard]] constexpr bool operator==(Seconds other) const { return std::abs(value_ - other.value_) < UnitConstants::DEFAULT_EPSILON; }
@@ -207,7 +205,7 @@ private: double value_;
 [[nodiscard]] constexpr inline Seconds operator-(Seconds lhs, Seconds rhs) { return Seconds(lhs.value() - rhs.value()); }
 [[nodiscard]] constexpr inline Seconds operator*(Seconds lhs, double scalar) { return Seconds(lhs.value() * scalar); }
 [[nodiscard]] constexpr inline Seconds operator*(double scalar, Seconds rhs) { return Seconds(scalar * rhs.value()); }
-[[nodiscard]] inline Seconds operator/(Seconds lhs, double scalar) { if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in operator/(Seconds, double)"); return Seconds(lhs.value() / scalar); }
+[[nodiscard]] inline Seconds operator/(Seconds lhs, double scalar) { return Seconds(lhs.value() / scalar); }
 inline std::ostream& operator<<(std::ostream& os, Seconds s) { return os << s.toString(); }
 
 
@@ -221,7 +219,7 @@ public: \
     ClassName& operator+=(ClassName other) { value_ += other.value_; return *this; } \
     ClassName& operator-=(ClassName other) { value_ -= other.value_; return *this; } \
     ClassName& operator*=(double scalar) { value_ *= scalar; return *this; } \
-    ClassName& operator/=(double scalar) { if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in " #ClassName); value_ /= scalar; return *this; } \
+    ClassName& operator/=(double scalar) { value_ /= scalar; return *this; } \
     [[nodiscard]] constexpr ClassName operator-() const { return ClassName(-value_); } \
     [[nodiscard]] constexpr ClassName abs() const { return ClassName(std::abs(value_)); } \
     [[nodiscard]] constexpr bool operator==(ClassName other) const { return std::abs(value_ - other.value_) < UnitConstants::DEFAULT_EPSILON; } \
@@ -232,12 +230,12 @@ public: \
     [[nodiscard]] constexpr bool operator>=(ClassName other) const { return value_ >= other.value_ || (*this == other); } \
 private: \
     double value_; \
-public: /* To allow friendship for free operators if ever needed, or just keep private */ \
+public: \
     friend constexpr inline ClassName operator+(ClassName lhs, ClassName rhs) { return ClassName(lhs.value() + rhs.value()); } \
     friend constexpr inline ClassName operator-(ClassName lhs, ClassName rhs) { return ClassName(lhs.value() - rhs.value()); } \
     friend constexpr inline ClassName operator*(ClassName lhs, double scalar) { return ClassName(lhs.value() * scalar); } \
     friend constexpr inline ClassName operator*(double scalar, ClassName rhs) { return ClassName(scalar * rhs.value()); } \
-    friend inline ClassName operator/(ClassName lhs, double scalar) { if (std::abs(scalar) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero in operator/(" #ClassName ", double)"); return ClassName(lhs.value() / scalar); }
+    friend inline ClassName operator/(ClassName lhs, double scalar) { return ClassName(lhs.value() / scalar); }
 
 class RadiansPerSecond {
     DEFINE_DERIVED_UNIT_OPERATIONS(RadiansPerSecond)
@@ -257,17 +255,19 @@ inline RadiansPerSecond DegreesPerSecond::toRadiansPerSecond() const { return Ra
 
 class RadiansPerSecondSq {
     DEFINE_DERIVED_UNIT_OPERATIONS(RadiansPerSecondSq)
-    // TODO: toDegreesPerSecondSq()
+    [[nodiscard]] DegreesPerSecondSq toDegreesPerSecondSq() const;
     [[nodiscard]] std::string toString(int precision = 3) const { return value_to_string_with_suffix(value_, precision, " rad/s^2"); }
 };
 inline std::ostream& operator<<(std::ostream& os, RadiansPerSecondSq rps2) { return os << rps2.toString(); }
 
 class DegreesPerSecondSq {
     DEFINE_DERIVED_UNIT_OPERATIONS(DegreesPerSecondSq)
-    // TODO: toRadiansPerSecondSq()
+    [[nodiscard]] RadiansPerSecondSq toRadiansPerSecondSq() const;
     [[nodiscard]] std::string toString(int precision = 1) const { return value_to_string_with_suffix(value_, precision, " deg/s^2"); }
 };
 inline std::ostream& operator<<(std::ostream& os, DegreesPerSecondSq dps2) { return os << dps2.toString(); }
+inline DegreesPerSecondSq RadiansPerSecondSq::toDegreesPerSecondSq() const { return DegreesPerSecondSq(value_ * (180.0 / UnitConstants::PI)); }
+inline RadiansPerSecondSq DegreesPerSecondSq::toRadiansPerSecondSq() const { return RadiansPerSecondSq(value_ * (UnitConstants::PI / 180.0)); }
 
 
 //======================================================================================
@@ -290,27 +290,28 @@ inline MillimetersPerSecond MetersPerSecond::toMillimetersPerSecond() const { re
 
 class MetersPerSecondSq {
     DEFINE_DERIVED_UNIT_OPERATIONS(MetersPerSecondSq)
-    // TODO: toMillimetersPerSecondSq()
+    [[nodiscard]] MillimetersPerSecondSq toMillimetersPerSecondSq() const;
     [[nodiscard]] std::string toString(int precision = 4) const { return value_to_string_with_suffix(value_, precision, " m/s^2"); }
 };
 inline std::ostream& operator<<(std::ostream& os, MetersPerSecondSq mps2) { return os << mps2.toString(); }
 
 class MillimetersPerSecondSq {
     DEFINE_DERIVED_UNIT_OPERATIONS(MillimetersPerSecondSq)
-    // TODO: toMetersPerSecondSq()
+    [[nodiscard]] MetersPerSecondSq toMetersPerSecondSq() const;
     [[nodiscard]] std::string toString(int precision = 1) const { return value_to_string_with_suffix(value_, precision, " mm/s^2"); }
 };
 inline std::ostream& operator<<(std::ostream& os, MillimetersPerSecondSq mmps2) { return os << mmps2.toString(); }
+inline MillimetersPerSecondSq MetersPerSecondSq::toMillimetersPerSecondSq() const { return MillimetersPerSecondSq(value_ * 1000.0); }
+inline MetersPerSecondSq MillimetersPerSecondSq::toMetersPerSecondSq() const { return MetersPerSecondSq(value_ / 1000.0); }
+
 
 #undef DEFINE_DERIVED_UNIT_OPERATIONS // Clean up macro
 
 // --- Inter-Unit Operations ---
 [[nodiscard]] constexpr inline MetersPerSecond operator/(Meters dist, Seconds time) {
-    if (std::abs(time.value()) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero time for M/s");
     return MetersPerSecond(dist.value() / time.value());
 }
 [[nodiscard]] constexpr inline RadiansPerSecond operator/(Radians angle, Seconds time) {
-    if (std::abs(time.value()) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero time for Rad/s");
     return RadiansPerSecond(angle.value() / time.value());
 }
 [[nodiscard]] constexpr inline Meters operator*(MetersPerSecond vel, Seconds time) { return Meters(vel.value() * time.value()); }
@@ -319,11 +320,9 @@ inline std::ostream& operator<<(std::ostream& os, MillimetersPerSecondSq mmps2) 
 [[nodiscard]] constexpr inline Radians operator*(Seconds time, RadiansPerSecond vel) { return Radians(time.value() * vel.value()); }
 
 [[nodiscard]] constexpr inline MetersPerSecondSq operator/(MetersPerSecond vel, Seconds time) {
-    if (std::abs(time.value()) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero time for M/s^2");
     return MetersPerSecondSq(vel.value() / time.value());
 }
 [[nodiscard]] constexpr inline RadiansPerSecondSq operator/(RadiansPerSecond vel, Seconds time) {
-    if (std::abs(time.value()) < UnitConstants::DEFAULT_EPSILON) throw std::runtime_error("Div by zero time for Rad/s^2");
     return RadiansPerSecondSq(vel.value() / time.value());
 }
 [[nodiscard]] constexpr inline MetersPerSecond operator*(MetersPerSecondSq accel, Seconds time) { return MetersPerSecond(accel.value() * time.value()); }

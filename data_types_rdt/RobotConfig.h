@@ -44,19 +44,34 @@ struct UdpConfig {
  * @struct EthercatConfig
  * @brief Configuration for an EtherCAT-based interface.
  */
-struct EthercatConfig {
-    std::string iface_name = "eth0"; ///< Network interface name for EtherCAT master.
+// НОВАЯ СТРУКТУРА для конфигурации SDO
+struct SdoConfig {
+    uint16_t index;
+    uint8_t subindex;
+    uint32_t value;
+    size_t size = 4; // Размер данных в байтах (по умолчанию 4 для UDINT/DINT)
 };
+
+/**
+ * @struct EthercatConfig
+ * @brief Configuration for an EtherCAT-based interface.
+ */
+struct EthercatConfig {
+    std::string iface_name = "enp1s0"; ///< Network interface name for EtherCAT master.
+    // НОВОЕ ПОЛЕ для хранения конфигураций SDO
+    std::vector<SdoConfig> sdo_configs;
+};
+
 
 /**
  * @struct UdpDebugStreamConfig
  * @brief Configuration for the optional UDP debug stream.
  */
 struct UdpDebugStreamConfig {
-    bool enabled = false;
-    std::string destination_ip = "127.0.0.1";
+    bool enabled = true;
+    std::string destination_ip = "192.168.70.102";
     uint16_t destination_port = 60000;
-    int stream_frequency_hz = 20;
+    int stream_frequency_hz = 50;
 };
 
 /**
@@ -75,6 +90,8 @@ struct InterfaceConfig {
     };
     
     RealtimeInterfaceType realtime_type = RealtimeInterfaceType::None;
+    /// @brief Period for the real-time loop in MotionManager AND the hardware interface.
+    unsigned int motion_manager_cycle_ms = 4; // 4 ms = 250 Hz по умолчанию
 
     UdpConfig udp_control_config;
     EthercatConfig ethercat_config;

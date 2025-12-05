@@ -5,8 +5,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Contributions Welcome](https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat)](https://github.com/hexakinetica/rdt-core/pulls)
 
-⚠️ **This is the legacy version of RDT.** ⚠️ It is now in maintenance mode, meaning it will only receive critical bug fixes and security updates. For the new, actively developed version, please see the [**rdt-next** repository]((https://github.com/hexakinetica/RDT-core-next)).
+⚠️ ⚠️ ⚠️ 
+**This is the legacy version of RDT.**  It is now in maintenance mode, meaning it will only receive critical bug fixes and security updates. For the new, actively developed version, please see the [**rdt-next** repository]((https://github.com/hexakinetica/RDT-core-next)).
+⚠️ ⚠️ ⚠️
 
+ 
 **A production-grade, open-source C++ architecture for industrial robot controllers.**
 
 This repository contains the full source code for the Robot Development Toolkit (RDT), the project at the heart of the book "[The RDT Book: Building a Real-World Robot Control System](https://github.com/hexakinetica/rdt-book)".

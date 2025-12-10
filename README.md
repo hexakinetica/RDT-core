@@ -111,11 +111,12 @@ The robot models included are for visualization and educational purposes only an
 The software is provided "as is" without any guarantee of accuracy, completeness, or fitness for any particular purpose.
 If you are the copyright holder or believe any material posted violates your rights, please contact us to request removal.
 
-### License
-This project is licensed under the MIT License.
-You are free to:
-Use, copy, modify, merge, publish, distribute, sublicense, and sell copies of the software
-Under the following terms:
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-The software is provided "as is", without warranty of any kind, express or implied.
-For more information, see the full license text: https://opensource.org/licenses/MIT
+### Open Source License (GPL v3)
+This project is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License as published by the Free Software Foundation**, either version 3 of the License.
+
+**What this means:**
+*   ✅ You can use this software for personal projects, education, and research.
+*   ✅ You can modify the code and distribute it.
+*   ⚠️ **Condition:** If you distribute this software (or a modified version of it), you **must open-source your code** under the same GPL v3 license.
+
+See the [LICENSE](LICENSE) file for the full text.

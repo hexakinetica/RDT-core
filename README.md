@@ -7,7 +7,7 @@
 
 ⚠️ ⚠️ ⚠️ 
 
-**This is the legacy version of RDT.**  It is now in maintenance mode, meaning it will only receive critical bug fixes. For the new, actively developed version, please see the [**RDT-next** repository](https://github.com/hexakinetica/RDT-core-next).
+**This is the legacy version of RDT.**  It is now in maintenance mode, meaning it will only receive critical bug fixes. For the new, actively developed version, please see the [**HexaMotion** repository](https://github.com/hexakinetica/HexaMotion).
 
 ⚠️ ⚠️ ⚠️
 
